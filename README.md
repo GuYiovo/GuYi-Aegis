@@ -1,104 +1,123 @@
-# 🛠️ GuYi Aegis Pro (Ent) - 开发技术文档
+# 🛡️ GuYi Aegis Pro - 企业级验证管理系统
 
-> **版本**: V6.0 | **架构**: Native PHP + SQLite | **类型**: 企业级授权管理系统
+<p align="center">
+  <a href="https://aegis.可爱.top/">
+    <img src="https://img.shields.io/badge/Documentation-官方文档-blue.svg" alt="Documentation">
+  </a>
+  <img src="https://img.shields.io/badge/PHP-7.4%2B-8892BF.svg" alt="PHP Version">
+  <img src="https://img.shields.io/badge/Database-SQLite3-green.svg" alt="Database">
+  <img src="https://img.shields.io/badge/License-Proprietary-red.svg" alt="License">
+</p>
 
-本文档旨在帮助开发者、维护者理解系统的底层架构、核心逻辑流、数据库设计及安全机制。
-
----
-
-## 1. 技术架构概览
-
-本系统采用 **无框架 (Framework-less)** 设计，基于原生 PHP 开发，以确保最小的资源占用和最简单的部署要求（Copy & Run）。
-
-- **设计模式**: 简化的 MVC (Model-View-Controller)
-- **核心语言**: PHP 7.4+
-- **数据存储**: SQLite 3 (文件型数据库，零配置)
-- **前端技术**: HTML5, CSS3 (Glassmorphism 风格), 原生 JavaScript (Fetch API)
-- **安全机制**: PDO 预处理, HMAC Cookie 签名, CSRF Token, IP 限流
+> **GuYi Aegis Pro** 是一款轻量级、高性能、无需配置复杂数据库的 PHP 验证管理系统。支持多应用接入、设备指纹绑定、卡密自动发卡与时长管理。内置精美的 Glassmorphism (毛玻璃) 风格 UI 与强大的后台管理面板。
 
 ---
 
-## 2. 核心文件职责
+## ✨ 核心特性
 
-| 文件路径 | 架构角色 | 职责描述 |
-| :--- | :--- | :--- |
-| `database.php` | **Model** | **核心逻辑层**。封装所有 SQL 操作，处理数据库初始化、表迁移、验证逻辑、激活逻辑及日志记录。 |
-| `cards.php` | **Controller/View** | **管理后台**。处理管理员登录（Cookie签名验证）、路由分发、业务操作（增删改查）及 HTML 渲染。 |
-| `api.php` | **API Interface** | **对外接口**。处理客户端请求，包含 IP 限流逻辑，返回标准 JSON 数据。 |
-| `config.php` | **Config** | **配置层**。定义系统常量（密钥、路径、卡类型时长）及安全响应头。 |
-| `verify.php` | **Ajax Handler** | **前端控制器**。处理网页版 `index.php` 的验证请求，逻辑与 API 类似但服务于 Session 环境。 |
-| `auth_check.php` | **Middleware** | **中间件**。用于受保护页面，检查 Session 有效性、设备一致性及卡密过期状态。 |
-
----
-
-## 3. 数据库设计 (Schema)
-
-系统启动时，`Database::__construct()` 会自动检查并创建/更新以下表结构。
-
-### 3.1. `applications` (租户表)
-用于多应用隔离支持。
-- `id`: INTEGER PK
-- `app_name`: VARCHAR (唯一，应用名称)
-- `app_key`: VARCHAR (接口通讯密钥，自动生成)
-- `status`: INTEGER (1=正常, 0=禁用)
-
-### 3.2. `cards` (卡密核心表)
-- `id`: INTEGER PK
-- `card_code`: VARCHAR (唯一卡密)
-- `app_id`: INTEGER (关联 applications.id, **0 代表通用卡**)
-- `card_type`: VARCHAR (hour/day/week/month...)
-- `status`: INTEGER (0=未激活, 1=已激活)
-- `device_hash`: VARCHAR (绑定的机器码/指纹)
-- `expire_time`: DATETIME (过期时间)
-- `create_time`: DATETIME
-
-### 3.3. `active_devices` (在线设备表)
-用于缓存和快速鉴权，减少主表查询压力。
-- `device_hash`: VARCHAR (机器码)
-- `card_code`: VARCHAR
-- `app_id`: INTEGER
-- `expire_time`: DATETIME
-
-### 3.4. `usage_logs` (审计日志)
-- 记录请求时间、IP、来源应用、卡密、机器码及验证结果。
+*   **⚡ 极速部署**: 基于 SQLite 架构，无需安装 MySQL，上传即用，自动初始化数据库。
+*   **🏢 多租户/多应用管理**: 单个后台管理多个软件/脚本的验证，每个应用拥有独立的 App Key。
+*   **🔐 安全防护**:
+    *   **核心安全**: CSRF 令牌防御、XSS 过滤、SQL 注入防御 (PDO预处理)。
+    *   **会话安全**: HMAC-SHA256 Cookie 签名，绑定 UserAgent 防止会话劫持。
+    *   **前端防护**: 内置防调试机制（禁止右键、F12、控制台），保护验证页面。
+    *   **API 防护**: 基于文件的 IP 速率限制 (Rate Limiting) 防止暴力破解。
+*   **📱 设备管理**: 自动计算设备指纹（Device Hash），支持单设备绑定、后台强制解绑、自动解绑过期设备。
+*   **💳 强大的卡密系统**:
+    *   支持时/天/周/月/季/年卡多种类型。
+    *   支持批量生成、导出 (TXT)、批量删除、**批量加时**。
+    *   实时追踪卡密状态（待激活、使用中、已过期、被禁用）。
+*   **📊 数据洞察**: 实时仪表盘，展示库存占比、活跃设备趋势及详细的操作审计日志。
+*   **🔌 标准接口**: 提供标准的 JSON API，易于对接易语言、Python、Lua、C# 等客户端。
 
 ---
 
-## 4. 核心业务逻辑流程
+## 🚀 快速开始
 
-### 4.1. 卡密验证与激活 (`verifyCard` 方法)
-位于 `database.php`，是系统的灵魂逻辑：
+### 1. 环境要求
+*   **PHP 版本**: 7.4 或更高 (建议 8.0+)
+*   **Web 服务器**: Nginx / Apache / OpenLiteSpeed
+*   **必需扩展**: 
+    *   `pdo_sqlite` (数据库支持)
+    *   `gd` (验证码生成)
+    *   `json` (API返回)
 
-1.  **应用鉴权**: 若请求包含 `app_key`，校验应用是否存在且状态为开启。
-2.  **在线缓存检查**: 查询 `active_devices` 表。若设备存在且未过期，直接返回成功（Success）。
-3.  **卡库查询**:
-    - **不存在**: 返回错误。
-    - **已激活 (Status=1)**:
-        - 校验是否过期。
-        - 校验 `device_hash` 是否匹配当前请求。
-        - 若匹配且未过期 -> 验证通过，刷新在线表。
-    - **未激活 (Status=0)**:
-        - 根据 `config.php` 中的 `CARD_TYPES` 计算过期时间。
-        - **开启事务 (Transaction)**。
-        - 更新卡密：状态设为1，写入机器码，写入过期时间。
-        - 写入在线表。
-        - **提交事务** -> 激活成功。
+### 2. 安装部署
 
-### 4.2. 后台安全登录
-位于 `cards.php`：
+1.  **上传源码**: 将所有文件上传至网站根目录或子目录。
+2.  **创建目录**: 确保服务器上存在以下目录结构（如果不存在请创建），并设置权限：
+    ```bash
+    /Verifyfile/   (存放 api.php 和 captcha.php)
+    /backend/      (存放静态资源如 logo.png)
+    /data/         (程序会自动创建此目录，需确保根目录有写入权限)
+    设置权限: 给予项目根目录写入权限，以便程序自动创建 data 目录和 cards.db 数据库文件。
+Linux: chmod -R 777 /www/wwwroot/你的网站目录/
+安全配置:
+打开 config.php。
+找到 define('SYS_SECRET', '...');。
+务必将默认字符串修改为一段随机的长字符串（这关系到你的登录安全）。
+访问后台:
+浏览器访问: http://你的域名/cards.php
+默认账号: admin
+默认密码: admin123
+(登录后请立即在后台“系统设置”中修改密码)
+📂 推荐目录结构
+为了确保代码正常运行，请保持以下文件结构：
 
-1.  **Cookie 强签名**: 登录成功后，生成包含 `过期时间|UA哈希` 的 Payload，并使用 `SYS_SECRET` 进行 HMAC-SHA256 签名写入 Cookie。
-2.  **验证码机制**: 未通过受信验证的设备（无有效Cookie）强制输入验证码 (`captcha.php`)。
-3.  **CSRF 防护**: 所有写操作（POST）均校验 Session 中的 `csrf_token`。
+<TEXT>
+/
+├── backend/            # [需新建] 存放 logo.png 等图片
+├── data/               # [自动生成] 存放 cards.db 和 .htaccess
+├── Verifyfile/         # [需新建] API 和 验证码目录
+│   ├── api.php         # 将源码中的 api.php 放入此目录
+│   └── captcha.php     # 将源码中的 captcha.php 放入此目录
+├── auth_check.php      # 核心权限检查
+├── cards.php           # 后台管理主程序
+├── config.php          # 配置文件
+├── database.php        # 数据库操作类
+├── index.php           # 用户前台验证页面
+├── verify.php          # 前端验证处理接口
+└── index1.php          # [需自建] 用户验证通过后的跳转目标页
+🔌 API 接口文档
+用于客户端软件（如易语言、Python脚本）对接验证系统。
 
----
+核心验证接口
+接口地址: http://你的域名/Verifyfile/api.php
+请求方式: POST (推荐) 或 GET
+返回格式: JSON
+1. 请求参数
+参数名	类型	必填	说明
+card (或 key)	String	✅	用户输入的卡密
+device	String	❌	设备机器码（不填则由服务器根据IP+UA生成，建议客户端传入）
+app_key	String	❌	应用接入 Key（在后台"应用接入"菜单获取，不填则验证通用卡）
+2. JSON 响应示例
+验证成功 (HTTP 200):
 
-## 5. API 内部开发规范
+<JSON>
+{
+    "code": 200,
+    "msg": "OK",
+    "data": {
+        "status": "active",
+        "expire_time": "2023-12-31 23:59:59",
+        "remaining_seconds": 86400,
+        "device_id": "a1b2c3d4..."
+    }
+}
+验证失败 (HTTP 403/429):
 
-若需修改 `Verifyfile/api.php`，请遵循：
-
-### 5.1. 输入处理
-兼容多种输入方式，优先级如下：
-```php
-$data = json_decode(file_get_contents('php://input'), true); // JSON Raw
-$param = $data['key'] ?? $_POST['key'] ?? $_GET['key'];
+<JSON>
+{
+    "code": 403,
+    "msg": "卡密已过期 / 无效的卡密代码",
+    "data": null
+}
+⚠️ 安全与维护建议
+隐藏后台: 建议将 cards.php 重命名为不规则文件名（例如 manage_992x.php），以防被扫描。
+HTTPS: 生产环境强烈建议开启 HTTPS，防止卡密在传输中被拦截。
+定期备份: 只需下载 /data/cards.db 文件即可完成全站数据备份。
+防盗链: 系统会自动在 /data/ 目录下生成 .htaccess 防止数据库被直接下载（仅限 Apache/LiteSpeed），Nginx 用户请在配置中手动禁止访问 .db 文件。
+🤝 社区与支持
+官方文档: https://aegis.可爱.top/
+交流群: 562807728
+Copyright © 2026 GuYi Aegis Pro. All Rights Reserved.
