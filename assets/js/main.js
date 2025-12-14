@@ -99,7 +99,28 @@ UI.form.addEventListener('submit', async (e) => {
             UI.showMsg(result.message, "success");
             if(UI.remember.checked) localStorage.setItem('saved_key', UI.input.value);
             else localStorage.removeItem('saved_key');
-            setTimeout(() => window.location.href = "index1.php", 1200);
+
+            // --- 核心修复开始：解决iOS 17跳转弹出地址栏问题 ---
+            setTimeout(() => {
+                fetch("index1.php")
+                .then(r => r.text())
+                .then(html => {
+                    // 1. 偷偷修改URL，让返回键逻辑正常（看起来像跳了，实际没跳）
+                    window.history.replaceState(null, "", "index1.php");
+                    
+                    // 2. 擦除当前文档，直接写入新页面代码
+                    // 浏览器认为还是在同一个页面，所以不会弹地址栏
+                    document.open();
+                    document.write(html);
+                    document.close();
+                })
+                .catch(err => {
+                    // 如果获取失败（如断网），降级使用普通跳转
+                    window.location.replace("index1.php");
+                });
+            }, 1200);
+            // --- 核心修复结束 ---
+
         } else {
             UI.showMsg(result.message, "error");
             UI.setLoading(false);

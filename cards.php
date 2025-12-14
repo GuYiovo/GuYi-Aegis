@@ -474,7 +474,7 @@ $activeDevices = $db->getActiveDevices();
                             <span style="font-size: 11px; background: #3b82f6; color: white; padding: 2px 8px; border-radius: 10px; font-weight: 500;">NEW</span>
                         </div>
                         <div style="font-size: 14px; color: #475569; line-height: 1.6;">
-                            欢迎使用 <b>GuYi Aegis Pro</b> 企业级验证管理系统。当前系统版本已更新至 V9.0。<br>
+                            欢迎使用 <b>GuYi Aegis Pro</b> 企业级验证管理系统。当前系统版本已更新至 V9.5。<br>
                             <ul style="margin: 5px 0 0 0; padding-left: 20px;">
                                 <li>QQ群562807728</li>
                                 <li>有bug可以进去反馈 <a href="?tab=logs" style="color:#3b82f6;text-decoration:none;font-weight:600;">审计日志</a> 检查异常。</li>

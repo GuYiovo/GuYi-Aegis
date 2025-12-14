@@ -1,11 +1,11 @@
 # 🛡️ GuYi Aegis Pro - 企业级验证管理系统
 
 > **📚 官方文档**: [**https://aegis.可爱.top/**](https://aegis.可爱.top/)  
-> *(提示：v9.0 Enterprise 架构已全新升级，为了获得最佳的对接体验，请务必优先查阅官方文档)*
+> *(提示：v9.5 Enterprise 架构已全新升级，为了获得最佳的对接体验，请务必优先查阅官方文档)*
 
 <p align="left">
   <a href="https://aegis.可爱.top/">
-    <img src="https://img.shields.io/badge/Version-v9.0_Enterprise-6366f1.svg?style=flat-square&logo=github&logoColor=white" alt="Version">
+    <img src="https://img.shields.io/badge/Version-v9.5_Enterprise-6366f1.svg?style=flat-square&logo=github&logoColor=white" alt="Version">
   </a>
   <img src="https://img.shields.io/badge/Database-MySQL_High_Concurrency-007AFF.svg?style=flat-square&logo=mysql&logoColor=white" alt="Database">
   <img src="https://img.shields.io/badge/Security-Enterprise_Grade-34C759.svg?style=flat-square&logo=security-scorecard&logoColor=white" alt="Security">
@@ -16,9 +16,9 @@
 
 ## 📖 产品概述
 
-**GuYi Aegis Pro v9.0 Enterprise** 是一套专为独立开发者与中小微企业打造的 **高并发、低延迟** 软件授权分发解决方案。
+**GuYi Aegis Pro v9.5 Enterprise** 是一套专为独立开发者与中小微企业打造的 **高并发、低延迟** 软件授权分发解决方案。
 
-v9.0 版本彻底重构了数据持久层，弃用了 SQLite，转而采用高性能的 **MySQL 数据库架构**，专为海量数据吞吐与高频并发验证场景设计。系统内置 **App Key 多租户隔离**、**MySQL 连接池优化** 以及 **云变量 2.0 引擎**，为您的软件资产提供固若金汤的保护与灵活高效的分发控制。
+v9.5 版本彻底重构了数据持久层，弃用了 SQLite，转而采用高性能的 **MySQL 数据库架构**，专为海量数据吞吐与高频并发验证场景设计。系统内置 **App Key 多租户隔离**、**MySQL 连接池优化** 以及 **云变量 2.0 引擎**，为您的软件资产提供固若金汤的保护与灵活高效的分发控制。
 
 ---
 
@@ -71,7 +71,7 @@ v9.0 版本彻底重构了数据持久层，弃用了 SQLite，转而采用高�
 
 ## 📂 部署架构与目录
 
-v9.0 采用 MySQL 数据库存储，无需本地数据文件，请确保 Web 根目录可写以便安装程序生成配置文件：
+v9.5 采用 MySQL 数据库存储，无需本地数据文件，请确保 Web 根目录可写以便安装程序生成配置文件：
 
 ```text
 / (Web Root)

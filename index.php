@@ -7,7 +7,12 @@ require_once 'config.php'; // 必须放在第一行！它会负责检查是否�
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- iOS全屏配置 -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>ACCESS CONTROL | 权限验证</title>
     <link rel="icon" href="backend/logo.png" type="image/png">
     
@@ -95,7 +100,7 @@ require_once 'config.php'; // 必须放在第一行！它会负责检查是否�
                 <h1>GuYi Access Verification</h1>
                 <div class="subtitle" onclick="copyGroup()">
                     <i class="ri-group-line" style="margin-right:4px; vertical-align: bottom;"></i>
-                    官方群: 562807728
+                    官方群: 562807728 公益模拟器 防止倒卖群里获取卡密或者联系群主
                 </div>
             </div>
             

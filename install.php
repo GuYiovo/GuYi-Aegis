@@ -2,6 +2,7 @@
 /**
  * System Installer Wizard
  * 包含环境检测、本地化UI、Favicon图标支持、修正跳转逻辑
+ * 修改：安装成功后自动删除自身
  */
 error_reporting(0);
 
@@ -92,8 +93,19 @@ define('CARD_TYPES', [
 ]);
 ?>";
             if (file_put_contents('config.php', $config_content)) {
-                // 锁定安装文件
-                rename(__FILE__, __FILE__ . '.lock');
+                // --- 修改核心逻辑：尝试删除自身 ---
+                $install_file = __FILE__;
+                $deleted = false;
+                
+                // 尝试删除
+                if (@unlink($install_file)) {
+                    $deleted = true;
+                } else {
+                    // 如果删不掉，降级为改名锁定
+                    @rename($install_file, $install_file . '.lock');
+                    $deleted = false;
+                }
+                
                 $step = 3; 
             } else {
                 $msg = "写入失败，请检查目录权限 (config.php)";
@@ -171,6 +183,7 @@ $env_pass = !in_array(false, array_column($env_data, 'status'));
         .alert-error { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #fca5a5; }
         .success-box { text-align: center; padding: 20px 0; }
         .success-icon { width: 80px; height: 80px; background: rgba(16, 185, 129, 0.1); border-radius: 50%; color: var(--success); display: flex; align-items: center; justify-content: center; margin: 0 auto 20px auto; }
+        .delete-notice { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; margin: 20px 0; font-size: 13px; text-align: left; line-height: 1.5; border: 1px solid rgba(255,255,255,0.05); }
     </style>
 </head>
 <body>
@@ -222,8 +235,22 @@ $env_pass = !in_array(false, array_column($env_data, 'status'));
         <div class="success-box">
             <div class="success-icon"><svg class="icon-svg" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></div>
             <h2>安装成功!</h2>
-            <p style="color:var(--text-sub);font-size:14px;">系统已就绪，配置文件已锁定。</p>
-            <!-- 修正：跳转到 cards.php (后台管理) -->
+            <p style="color:var(--text-sub);font-size:14px; margin-bottom: 20px;">系统已就绪，配置文件已锁定。</p>
+            
+            <!-- 显示文件删除状态，防止用户疑惑 -->
+            <?php if(isset($deleted) && $deleted): ?>
+                <div class="delete-notice" style="color:#34d399; border-color: rgba(52, 211, 153, 0.2); background: rgba(52, 211, 153, 0.1);">
+                    <strong><i class="fas fa-shield-alt"></i> 安全提示：</strong><br>
+                    为了防止系统被二次重置或恶意攻击，安装程序 <code>install.php</code> 已自动删除。
+                </div>
+            <?php else: ?>
+                <div class="delete-notice" style="color:#f87171; border-color: rgba(248, 113, 113, 0.2); background: rgba(248, 113, 113, 0.1);">
+                    <strong><i class="fas fa-exclamation-triangle"></i> 重要警告：</strong><br>
+                    系统权限不足，无法自动删除 <code>install.php</code>。<br>
+                    <strong>请务必立即手动删除该文件！</strong>否则您的网站随时可能被重置。
+                </div>
+            <?php endif; ?>
+
             <button class="btn-primary" onclick="window.location.href='cards.php'">进入后台管理</button>
         </div>
     <?php endif; ?>
