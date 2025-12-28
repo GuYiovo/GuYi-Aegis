@@ -96,9 +96,40 @@ if (!class_exists('Database')) {
                 password_hash VARCHAR(255) NOT NULL
             ) $tableOptions");
             
+            // 系统配置表（新功能）
+            $this->pdo->exec("CREATE TABLE IF NOT EXISTS system_settings (
+                key_name VARCHAR(50) PRIMARY KEY,
+                value TEXT
+            ) $tableOptions");
+            
             if ($this->pdo->query("SELECT COUNT(*) FROM admin")->fetchColumn() == 0) {
-                $this->pdo->prepare("INSERT IGNORE INTO admin (id, username, password_hash) VALUES (1, 'admin', ?)")->execute([password_hash('admin123', PASSWORD_DEFAULT)]);
+                $this->pdo->prepare("INSERT IGNORE INTO admin (id, username, password_hash) VALUES (1, 'GuYi', ?)")->execute([password_hash('admin123', PASSWORD_DEFAULT)]);
             }
+        }
+
+        // --- 系统配置管理 (新功能) ---
+        public function getSystemSettings() {
+            $stmt = $this->pdo->query("SELECT * FROM system_settings");
+            $data = [];
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $data[$row['key_name']] = $row['value'];
+            }
+            return $data;
+        }
+
+        public function saveSystemSettings($settings) {
+            $stmt = $this->pdo->prepare("REPLACE INTO system_settings (key_name, value) VALUES (?, ?)");
+            foreach ($settings as $key => $val) {
+                $stmt->execute([$key, $val]);
+            }
+        }
+        
+        public function getAdminUsername() {
+            return $this->pdo->query("SELECT username FROM admin WHERE id=1")->fetchColumn() ?: 'GuYi';
+        }
+        
+        public function updateAdminUsername($newUsername) {
+            $this->pdo->prepare("UPDATE admin SET username=? WHERE id=1")->execute([$newUsername]);
         }
 
         // --- 应用管理 ---
