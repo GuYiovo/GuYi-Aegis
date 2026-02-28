@@ -1,515 +1,212 @@
 <?php
-// --- [防白屏核心] 强制开启错误提示 ---
+/**
+ * ╔══════════════════════════════════════════════════════════╗
+ * ║  GuYi Network Verification System — V4Remastered      ║
+ * ║Award-Grade Admin Control Panel                ║
+ * ╚══════════════════════════════════════════════════════════╝
+ */
+
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
-// ----------------------------------------------
 
 require_once 'config.php';
 require_once 'database.php';
+
 session_start();
 
-// --- [防白屏] 数据库连接异常捕获 ---
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// §1. 数据库连接
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 try {
     $db = new Database();
 } catch (Throwable $e) {
-    die('<div style="font-family:sans-serif;text-align:center;padding:50px;">
-        <h2 style="color:#ef4444;">系统连接失败</h2>
-        <p>无法连接到数据库，原因如下：</p>
-        <code style="background:#f1f5f9;padding:10px;display:block;margin:20px auto;max-width:600px;border-radius:5px;">'.htmlspecialchars($e->getMessage()).'</code>
-        <p>请检查 config.php 配置或数据库服务状态。</p>
-    </div>');
+    http_response_code(503);
+    die('数据库连接失败：' . htmlspecialchars($e->getMessage()));
 }
 
-// 安全检查
-if (defined('SYS_SECRET') && strpos(SYS_SECRET, 'ENT_SECure_K3y') !== false) {
-    die('<div style="color:red;font-weight:bold;padding:20px;text-align:center;">安全警告：请立即修改 config.php 中的 SYS_SECRET 常量！</div>');
-}
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// §2. 登录鉴权守卫
+//未登录 →跳转 login.php
+//     IP变更 → 强制重新登录
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// --- [自动修正用户名逻辑] ---
-try {
-    $currentNameCheck = $db->getAdminUsername();
-    if ($currentNameCheck === 'admin') {
-        $db->updateAdminUsername('GuYi');
-    }
-} catch (Exception $e) { /* 忽略错误 */ }
-// ---------------------------
-
-// --- [防白屏] CSRF 与 指纹初始化 ---
-try {
-    if (empty($_SESSION['csrf_token'])) {
-        if (function_exists('random_bytes')) {
-            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-        } elseif (function_exists('openssl_random_pseudo_bytes')) {
-            $_SESSION['csrf_token'] = bin2hex(openssl_random_pseudo_bytes(32));
-        } else {
-            $_SESSION['csrf_token'] = md5(uniqid(mt_rand(), true));
-        }
-    }
-    $csrf_token = $_SESSION['csrf_token'];
-
-    $rawHash = $db->getAdminHash();
-    $adminHashFingerprint = md5((string)$rawHash);
-
-} catch (Throwable $e) {
-    die("系统初始化异常: " . htmlspecialchars($e->getMessage()));
-}
-
-function verifyCSRF() {
-    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'])) {
-        header('HTTP/1.1 403 Forbidden');
-        die('Security Alert: CSRF Token Mismatch. Please refresh the page.');
-    }
-}
-
-$is_trusted = false;
-if (isset($_COOKIE['admin_trust'])) {
-    $parts = explode('|', $_COOKIE['admin_trust']);
-    if (count($parts) === 2) {
-        list($payload, $sign) = $parts;
-        if (hash_equals(hash_hmac('sha256', $payload, SYS_SECRET), $sign)) {
-            $data = json_decode(base64_decode($payload), true);
-            if ($data && 
-                isset($data['exp'], $data['ua'], $data['ph']) && 
-                $data['exp'] > time() && 
-                $data['ua'] === md5($_SERVER['HTTP_USER_AGENT']) &&
-                hash_equals($data['ph'], $adminHashFingerprint)
-            ) {
-                $is_trusted = true;
-            }
-        }
-    }
-}
-
-$appList = [];
-try {
-    $appList = $db->getApps(); 
-} catch (Throwable $e) {
-    $appList = []; 
-    if(isset($_SESSION['admin_logged_in'])) $errorMsg = "应用列表加载异常: " . htmlspecialchars($e->getMessage());
-}
-
-// --- 加载系统自定义配置 ---
-$sysConf = $db->getSystemSettings();
-$currentAdminUser = $db->getAdminUsername();
-
-// 默认值处理
-$conf_site_title = $sysConf['site_title'] ?? 'GuYi Access';
-$conf_favicon = $sysConf['favicon'] ?? 'backend/logo.png';
-$conf_avatar = $sysConf['admin_avatar'] ?? 'backend/logo.png';
-$conf_bg_pc = $sysConf['bg_pc'] ?? 'backend/pcpjt.png';
-$conf_bg_mobile = $sysConf['bg_mobile'] ?? 'backend/pjt.png';
-// [新增] 背景模糊配置，默认开启(1)
-$conf_bg_blur = $sysConf['bg_blur'] ?? '1';
-
-// 检测设备类型 (用于部分后端逻辑)
-$is_mobile_client = preg_match("/(android|avantgo|blackberry|bolt|boost|cricket|docomo|fone|hiptop|mini|mobi|palm|phone|pie|samsung|scp|wap|windows ce;iemobile|xhtml\\+xml)/i", $_SERVER["HTTP_USER_AGENT"]);
-
-// --- 业务逻辑 ---
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['batch_export'])) {
-    verifyCSRF();
-    if (!isset($_SESSION['admin_logged_in'])) die('Unauthorized');
-    
-    $ids = $_POST['ids'] ?? [];
-    if (empty($ids)) {
-        echo "<script>alert('请先勾选需要导出的卡密'); history.back();</script>"; exit;
-    }
-    $data = $db->getCardsByIds($ids);
-    
-    header('Content-Type: text/plain');
-    header('Content-Disposition: attachment; filename="cards_export_'.date('YmdHis').'.txt"');
-    
-    foreach ($data as $row) {
-        echo "{$row['card_code']}\r\n";
-    }
-    exit;
-}
-
-if (isset($_GET['logout'])) { 
-    session_destroy(); 
-    setcookie('admin_trust', '', time() - 3600, '/'); 
-    header('Location: cards.php'); 
-    exit; 
-}
-
-if (!isset($_SESSION['admin_logged_in']) && $is_trusted) {
-    $_SESSION['admin_logged_in'] = true;
-    session_regenerate_id(true);
-    $_SESSION['last_ip'] = $_SERVER['REMOTE_ADDR'];
-}
-
-if (isset($_SESSION['admin_logged_in']) && isset($_SESSION['last_ip']) && $_SESSION['last_ip'] !== $_SERVER['REMOTE_ADDR']) {
+// IP 锁定校验
+if (
+    isset($_SESSION['admin_logged_in'], $_SESSION['last_ip']) &&
+    $_SESSION['last_ip'] !== $_SERVER['REMOTE_ADDR']
+) {
     session_unset();
     session_destroy();
-    header('Location: cards.php');
+    header('Location: login.php');
     exit;
 }
 
+// 未登录跳转
 if (!isset($_SESSION['admin_logged_in'])) {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
-        $error = null;
-        if (!$is_trusted) {
-            $input_captcha = strtoupper($_POST['captcha'] ?? '');
-            $sess_captcha = $_SESSION['captcha_code'] ?? 'INVALID';
-            unset($_SESSION['captcha_code']);
-            if (empty($input_captcha) || $input_captcha !== $sess_captcha) $error = "验证码错误或已过期";
-        }
+    header('Location: login.php');
+    exit;
+}
 
-        if (!$error) {
-            $hash = $db->getAdminHash();
-            if (!empty($hash) && password_verify($_POST['password'], $hash)) {
-                session_regenerate_id(true);
-                
-                $_SESSION['admin_logged_in'] = true;
-                $_SESSION['last_ip'] = $_SERVER['REMOTE_ADDR'];
-                
-                $cookieData = [
-                    'exp' => time() + 86400 * 3, 
-                    'ua' => md5($_SERVER['HTTP_USER_AGENT']),
-                    'ph' => md5($hash)
-                ];
-                $payload = base64_encode(json_encode($cookieData));
-                $sign = hash_hmac('sha256', $payload, SYS_SECRET);
-                setcookie('admin_trust', "$payload|$sign", time() + 86400 * 3, '/', '', false, true);
-                
-                header('Location: cards.php'); exit;
-            } else {
-                usleep(500000); 
-                $error = "访问被拒绝：密钥无效";
-            }
-        }
-        $login_error = $error;
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// §3. CSRF Token
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
+function verifyCSRF(): void {
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'])) {
+        http_response_code(403);
+        die('Security Alert: CSRF Token Mismatch.');
     }
 }
 
-if (!isset($_SESSION['admin_logged_in'])): 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// §4. 全局数据预加载
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-?>
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title>登录 - <?php echo htmlspecialchars($conf_site_title); ?></title>
-    <link rel="icon" href="<?php echo htmlspecialchars($conf_favicon); ?>" type="image/png">
-    <style>
-        :root {
-            --ay-accent-start: #ff7dc6;
-            --ay-accent-end: #7aa8ff;
-            --ay-text: #f3f6ff;
-            --ay-sub: #b9c3e6;
-            --ay-card: rgba(12, 14, 28, .55);
-            --ay-stroke: rgba(255, 255, 255, .18);
-            --ay-input: rgba(255, 255, 255, .06);
-            --ay-input-h: 48px;
-            --ay-radius: 20px;
-        }
+$appList = [];
+try { $appList = $db->getApps(); } catch (Throwable $e) { $appList = []; }
 
-        html, body { height: 100%; }
-        *, *::before, *::after { box-sizing: border-box; }
+$sysConf          = $db->getSystemSettings();
+$currentAdminUser = $db->getAdminUsername();
 
-        body.ay-bg {
-            margin: 0;
-            color: var(--ay-text);
-            font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, PingFang SC, Microsoft YaHei, system-ui, Arial;
-            /* [移动端适配] 默认PC壁纸 */
-            background-image: url('<?php echo htmlspecialchars($conf_bg_pc); ?>');
-            background-size: cover;
-            background-position: center;
-            background-attachment: fixed;
-            overflow-x: hidden;
-        }
-        
-        /* [移动端适配] 屏幕小于768px时自动切换壁纸 */
-        @media (max-width: 768px) {
-            body.ay-bg {
-                background-image: url('<?php echo htmlspecialchars($conf_bg_mobile); ?>') !important;
-            }
-        }
+$conf_site_title = $sysConf['site_title']   ?? 'GuYi Access';
+$conf_favicon    = $sysConf['favicon']       ?? 'backend/logo.png';
+$conf_avatar     = $sysConf['admin_avatar']  ?? 'backend/logo.png';
+$conf_bg_pc      = $sysConf['bg_pc']         ?? 'backend/pcpjt.png';
+$conf_bg_mobile  = $sysConf['bg_mobile']     ?? 'backend/pjt.png';
+$conf_bg_blur    = $sysConf['bg_blur']       ?? '1';
 
-        .ay-dim {
-            position: fixed; inset: 0; pointer-events: none;
-            background: rgba(0,0,0,0.3);
-            /* [模糊开关] 动态设置模糊度 */
-            backdrop-filter: blur(<?php echo $conf_bg_blur === '1' ? '20px' : '0px'; ?>);
-        }
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// §5. 批量导出处理（在HTML 输出前处理）
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-        .ay-petals { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
-        .ay-petals i {
-            position: absolute; width: 12px; height: 10px;
-            background: linear-gradient(135deg, #ffd1e6, #ff9aca);
-            border-radius: 80% 80% 80% 20% / 80% 80% 20% 80%;
-            opacity: .5; filter: blur(.2px);
-            animation: ay-fall linear infinite; transform: rotate(20deg);
-        }
-        .ay-petals i:nth-child(3n) { width: 9px; height: 7px; animation-duration: 12s; }
-        .ay-petals i:nth-child(4n) { animation-duration: 10s; opacity: .35; }
-        .ay-petals i:nth-child(5n) { width: 14px; height: 12px; animation-duration: 14s; }
-        @keyframes ay-fall { to { transform: translateY(110vh) rotate(360deg); } }
+if($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['batch_export'])) {
+    verifyCSRF();
+    $ids = $_POST['ids'] ?? [];
+    if (empty($ids)) {
+        echo "<script>alert('请先勾选需要导出的卡密');history.back();</script>";
+        exit;
+    }
+    $data = $db->getCardsByIds($ids);
+    header('Content-Type: text/plain; charset=utf-8');
+    header('Content-Disposition: attachment; filename="cards_export_' . date('YmdHis') . '.txt"');
+    foreach ($data as $row) {
+        echo $row['card_code'] . "\r\n";
+    }
+    exit;
+}
 
-        .ay-wrap {
-            min-height: 100dvh; display: grid; place-items: center;
-            padding: clamp(16px, 4vw, 32px); perspective: 1000px;
-        }
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// §6. 登出处理
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-        .ay-card {
-            width: min(480px, 92vw); margin-top: 14px;
-            background: var(--ay-card); 
-            backdrop-filter: blur(20px) saturate(140%);
-            border: 1px solid var(--ay-stroke); border-radius: 24px;
-            box-shadow: 0 18px 60px rgba(5, 9, 20, .45);
-            position: relative; overflow: hidden; transform-style: preserve-3d;
-            transition: box-shadow .25s ease; will-change: transform;
-        }
-        .ay-card:hover { box-shadow: 0 24px 80px rgba(5,9,20,.55); }
-        .ay-card::after{
-            content:""; position:absolute; inset:-1px; border-radius:inherit; pointer-events:none; mix-blend-mode:overlay; opacity:0; transition: opacity .3s ease;
-            background: radial-gradient(300px 300px at var(--mx, 50%) var(--my, 50%), rgba(255,255,255,.15), rgba(255,255,255,0) 60%); z-index: 10;
-        }
-        .ay-card:hover::after{ opacity:1; }
-        .ay-card::before {
-            content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1px;
-            background: conic-gradient(from 200deg, var(--ay-accent-start), var(--ay-accent-end), var(--ay-accent-start));
-            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-            -webkit-mask-composite: xor; mask-composite: exclude;
-            opacity: .7; pointer-events: none;
-        }
+if (isset($_GET['logout'])) {
+    session_destroy();
+    setcookie('admin_trust', '', time() - 3600, '/');
+    header('Location: login.php');
+    exit;
+}
 
-        .ay-head { padding: 26px 22px 8px; display: grid; place-items: center; row-gap: 8px; }
-        .ay-logo {
-            width: 64px; height: 64px; border-radius: 50%;
-            background: url("<?php echo htmlspecialchars($conf_avatar); ?>") no-repeat center/cover;
-            box-shadow: 0 8px 26px rgba(255, 154, 202, .25);
-        }
-        .ay-title { margin: 4px 0 0; font-weight: 900; letter-spacing: .6px; font-size: clamp(18px, 2.6vw, 22px); color: white; }
-        .ay-sub { margin: 0 0 6px; color: var(--ay-sub); font-size: 12px; text-align: center; }
-
-        .ay-body { padding: 16px 22px 22px; }
-        .ay-field { position: relative; margin: 16px 0 22px; }
-        .ay-input {
-            width: 100%; height: var(--ay-input-h); padding: 12px 14px; border-radius: 16px;
-            border: 1px solid var(--ay-stroke); background: var(--ay-input); color: var(--ay-text);
-            outline: none; transition: all .18s ease;
-        }
-        .ay-input:-webkit-autofill {
-            -webkit-text-fill-color: var(--ay-text) !important;
-            transition: background-color 5000s ease-in-out 0s;
-            box-shadow: inset 0 0 0 1000px rgba(255, 255, 255, 0.06) !important;
-        }
-        .ay-input::placeholder { color: transparent; }
-        .ay-label {
-            position: absolute; left: 14px; top: 50%; transform: translateY(-52%);
-            font-size: 13px; color: var(--ay-sub); pointer-events: none;
-            transition: all .2s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .ay-input:focus {
-            border-color: rgba(255, 255, 255, .38);
-            box-shadow: 0 0 0 3px rgba(255, 125, 198, .18);
-            background: rgba(255, 255, 255, .08);
-        }
-        .ay-input:focus + .ay-label, .ay-input:not(:placeholder-shown) + .ay-label {
-            top: -9px; font-size: 11px; background: rgba(10, 12, 24, .95);
-            padding: 0 8px; border-radius: 999px; color: #e9eaff;
-            border: 1px solid rgba(255, 255, 255, .15); transform: translateY(0);
-        }
-
-        .ay-eye {
-            position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
-            width: 34px; height: 34px; border-radius: 10px; border: 1px solid transparent;
-            background: transparent; display: grid; place-items: center; cursor: pointer; transition: background .2s;
-        }
-        .ay-eye:hover { background: rgba(255,255,255,0.1); }
-        .ay-eye svg { transition: stroke .3s ease; }
-
-        .ay-captcha-img {
-            position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-            height: 36px; border-radius: 10px; cursor: pointer;
-            border: 1px solid rgba(255,255,255,0.1); opacity: 0.85; transition: opacity .2s;
-        }
-        .ay-captcha-img:hover { opacity: 1; }
-
-        .ay-btn {
-            width: 100%; height: 48px; border: none; border-radius: 14px; cursor: pointer;
-            color: #ffffff; font-weight: 900; letter-spacing: .5px; margin-top: 10px;
-            background: linear-gradient(135deg, #ffb6f0, #9ad6ff);
-            box-shadow: 0 12px 30px rgba(122, 168, 255, .35), inset 0 1px 0 rgba(255, 255, 255, .7);
-            position: relative; overflow: hidden; transition: transform .1s ease, box-shadow .2s ease, filter .2s;
-        }
-        .ay-btn:hover { 
-            transform: translateY(-2px); 
-            box-shadow: 0 16px 36px rgba(122,168,255,.45), inset 0 1px 0 rgba(255,255,255,.8); 
-        }
-        .ay-btn:active { 
-            transform: translateY(1px) scale(0.98); filter: brightness(0.95);
-        }
-        .ay-btn::after{ 
-            content:""; position:absolute; top:-20%; bottom:-20%; left:-40%; right:-40%; pointer-events:none;
-            background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.4) 50%, rgba(255,255,255,0) 100%);
-            transform: translateX(-120%) skewX(-20deg); transition: transform .6s ease;
-        }
-        .ay-btn:hover::after{ transform: translateX(140%) skewX(-20deg); }
-
-        .ay-foot { margin: 12px 0 8px; text-align: center; color: #dfe6ff; font-size: 12px; opacity: .7; transition: opacity .2s; }
-        .ay-foot:hover { opacity: 1; }
-        
-        .ay-error {
-            background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.3);
-            color: #fca5a5; font-size: 12px; padding: 8px 12px; border-radius: 12px;
-            margin-bottom: 12px; display: flex; align-items: center; gap: 6px;
-        }
-
-        @media (max-width: 480px) {
-            :root { --ay-input-h: 46px; }
-            .ay-body { padding: 12px 16px 18px; }
-            .ay-card { transform: none !important; }
-        }
-    </style>
-</head>
-<body class="ay-bg">
-<div class="ay-dim" aria-hidden="true"></div>
-<div class="ay-petals" aria-hidden="true">
-    <i style="left:6%; top:-8vh; animation-duration:11s"></i>
-    <i style="left:24%; top:-12vh; animation-duration:13s"></i>
-    <i style="left:52%; top:-16vh; animation-duration:12s"></i>
-    <i style="left:72%; top:-10vh; animation-duration:10s"></i>
-    <i style="left:86%; top:-18vh; animation-duration:14s"></i>
-</div>
-
-<main class="ay-wrap">
-    <section class="ay-card" id="ay-card" role="dialog" aria-labelledby="ay-title" aria-describedby="ay-sub">
-        <header class="ay-head">
-            <div class="ay-logo" aria-hidden="true"></div>
-            <h1 id="ay-title" class="ay-title">欢迎回来，指挥官</h1>
-            <p id="ay-sub" class="ay-sub">正在验证您的管理员身份</p>
-        </header>
-
-        <div class="ay-body">
-            <?php if(isset($login_error)): ?>
-                <div class="ay-error">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
-                    <?php echo $login_error; ?>
-                </div>
-            <?php endif; ?>
-
-            <form id="ay-form" method="POST">
-                <div class="ay-field">
-                    <input id="ay-user" name="password" class="ay-input" type="password" placeholder=" "
-                           autocomplete="current-password" required style="padding-right: 44px;">
-                    <span class="ay-label">管理员密钥</span>
-                    <button type="button" class="ay-eye" id="ay-eye" aria-label="显示密钥">
-                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#cfe1ff" stroke-width="2"
-                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12Z"/>
-                            <circle cx="12" cy="12" r="3"/>
-                        </svg>
-                    </button>
-                </div>
-
-                <?php if(!$is_trusted): ?>
-                <div class="ay-field">
-                    <input id="ay-captcha" name="captcha" class="ay-input" type="text" placeholder=" "
-                           autocomplete="off" required maxlength="4" style="padding-right: 120px;">
-                    <span class="ay-label">验证码</span>
-                    <img src="Verifyfile/captcha.php" class="ay-captcha-img" onclick="this.src='Verifyfile/captcha.php?t='+Math.random()" title="点击刷新">
-                </div>
-                <?php endif; ?>
-
-                <button class="ay-btn" type="submit" id="ay-submit">立即进入</button>
-            </form>
-            <div class="ay-foot">© <?php echo htmlspecialchars($conf_site_title); ?> System</div>
-        </div>
-    </section>
-</main>
-
-<script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const passInput = document.getElementById('ay-user');
-        const eyeBtn = document.getElementById('ay-eye');
-        if(eyeBtn && passInput) {
-            const eyeIcon = eyeBtn.querySelector('svg');
-            eyeBtn.addEventListener('click', () => {
-                const isPassword = passInput.type === 'password';
-                passInput.type = isPassword ? 'text' : 'password';
-                eyeIcon.style.stroke = isPassword ? '#ff7dc6' : '#cfe1ff';
-            });
-        }
-    });
-</script>
-</body>
-</html>
-<?php exit; endif; ?>
-<?php
-// ----------------------------------------------------------------------
-// 后端逻辑
-// ----------------------------------------------------------------------
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// §7. 路由 & 页面标题
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 $tab = $_GET['tab'] ?? 'dashboard';
 $pageTitles = [
-    'dashboard' => '首页',
-    'apps' => '应用管理',
-    'list' => '单码管理',
-    'create' => '批量制卡',
-    'logs' => '审计日志',
-    'settings' => '系统配置'
+    'dashboard' => '仪表盘',
+    'apps'=> '应用管理',
+    'list'      => '卡密库存',
+    'create'    => '批量制卡',
+    'logs'      => '审计日志',
+    'settings'  => '全局配置',
 ];
 $currentTitle = $pageTitles[$tab] ?? '控制台';
+$pageIcons = [
+    'dashboard' => 'fa-chart-pie',
+    'apps'      => 'fa-cubes',
+    'list'      => 'fa-database',
+    'create'    => 'fa-wand-magic-sparkles',
+    'logs'      => 'fa-shield-halved',
+    'settings'  => 'fa-gear',
+];
+$currentIcon = $pageIcons[$tab] ?? 'fa-circle';
 
-$msg = '';
-if(!isset($errorMsg)) $errorMsg = ''; 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// §8. POST 业务逻辑
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+$msg= '';
+$errorMsg = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCSRF();
-    // (此处省略了相同的POST处理逻辑，未做改动，保持原样)
+
     if (isset($_POST['create_app'])) {
         try {
             $appName = trim($_POST['app_name']);
             if (empty($appName)) throw new Exception("应用名称不能为空");
-            $db->createApp(htmlspecialchars($appName), htmlspecialchars($_POST['app_version'] ?? ''), htmlspecialchars($_POST['app_notes']));
-            $msg = "应用「".htmlspecialchars($appName)."」创建成功！";
+            $db->createApp(
+                htmlspecialchars($appName),
+                htmlspecialchars($_POST['app_version'] ?? ''),
+                htmlspecialchars($_POST['app_notes'])
+            );
+            $msg= "应用「" . htmlspecialchars($appName) . "」创建成功";
             $appList = $db->getApps();
-        } catch (Exception $e) { $errorMsg = htmlspecialchars($e->getMessage()); }
-    } elseif (isset($_POST['toggle_app'])) {
+        } catch (Exception $e) { $errorMsg = $e->getMessage(); }
+    }
+    elseif (isset($_POST['toggle_app'])) {
         $db->toggleAppStatus($_POST['app_id']);
-        $msg = "应用状态已更新";
-        $appList = $db->getApps();
-    } elseif (isset($_POST['delete_app'])) {
+        $msg     = "应用状态已切换";$appList = $db->getApps();
+    }
+    elseif (isset($_POST['delete_app'])) {
         try {
             $db->deleteApp($_POST['app_id']);
-            $msg = "应用已删除";
+            $msg     = "应用已删除";
             $appList = $db->getApps();
-        } catch (Exception $e) { $errorMsg = htmlspecialchars($e->getMessage()); }
-    } elseif (isset($_POST['edit_app'])) { 
+        } catch (Exception $e) { $errorMsg = $e->getMessage(); }
+    }
+    elseif (isset($_POST['edit_app'])) {
         try {
-            $appId = intval($_POST['app_id']);
+            $appId   = intval($_POST['app_id']);
             $appName = trim($_POST['app_name']);
             if (empty($appName)) throw new Exception("应用名称不能为空");
-            $db->updateApp($appId, htmlspecialchars($appName), htmlspecialchars($_POST['app_version'] ?? ''), htmlspecialchars($_POST['app_notes']));
-            $msg = "应用信息已更新";
+            $db->updateApp(
+                $appId,
+                htmlspecialchars($appName),
+                htmlspecialchars($_POST['app_version'] ?? ''),
+                htmlspecialchars($_POST['app_notes'])
+            );
+            $msg     = "应用信息已更新";
             $appList = $db->getApps();
-        } catch (Exception $e) { $errorMsg = htmlspecialchars($e->getMessage()); }
+        } catch (Exception $e) { $errorMsg = $e->getMessage(); }
     }
     elseif (isset($_POST['add_var'])) {
         try {
             $varAppId = intval($_POST['var_app_id']);
-            $varKey = trim($_POST['var_key']);
-            $varVal = trim($_POST['var_value']);
-            $varPub = isset($_POST['var_public']) ? 1 : 0;
+            $varKey   = trim($_POST['var_key']);
+            $varVal= trim($_POST['var_value']);
+            $varPub   = isset($_POST['var_public']) ? 1 : 0;
             if (empty($varKey)) throw new Exception("变量名不能为空");
             $db->addAppVariable($varAppId, htmlspecialchars($varKey), htmlspecialchars($varVal), $varPub);
-            $msg = "变量「".htmlspecialchars($varKey)."」添加成功";
-        } catch (Exception $e) { $errorMsg = htmlspecialchars($e->getMessage()); }
+            $msg = "变量「" . htmlspecialchars($varKey) . "」添加成功";
+        } catch (Exception $e) { $errorMsg = $e->getMessage(); }
     }
     elseif (isset($_POST['edit_var'])) {
         try {
-            $varId = intval($_POST['var_id']);
+            $varId= intval($_POST['var_id']);
             $varKey = trim($_POST['var_key']);
             $varVal = trim($_POST['var_value']);
             $varPub = isset($_POST['var_public']) ? 1 : 0;
             if (empty($varKey)) throw new Exception("变量名不能为空");
             $db->updateAppVariable($varId, htmlspecialchars($varKey), htmlspecialchars($varVal), $varPub);
             $msg = "变量更新成功";
-        } catch (Exception $e) { $errorMsg = htmlspecialchars($e->getMessage()); }
+        } catch (Exception $e) { $errorMsg = $e->getMessage(); }
     }
     elseif (isset($_POST['del_var'])) {
         $db->deleteAppVariable($_POST['var_id']);
@@ -517,1420 +214,1842 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     elseif (isset($_POST['batch_delete'])) {
         $count = $db->batchDeleteCards($_POST['ids'] ?? []);
-        $msg = "已批量删除 {$count} 张卡密";
-    } elseif (isset($_POST['batch_unbind'])) {
+        $msg= "已批量删除 {$count} 张卡密";
+    }
+    elseif (isset($_POST['batch_unbind'])) {
         $count = $db->batchUnbindCards($_POST['ids'] ?? []);
-        $msg = "已批量解绑 {$count} 个设备";
-    } elseif (isset($_POST['batch_add_time'])) {
+        $msg   = "已批量解绑 {$count} 个设备";
+    }
+    elseif (isset($_POST['batch_add_time'])) {
         $hours = floatval($_POST['add_hours']);
         $count = $db->batchAddTime($_POST['ids'] ?? [], $hours);
-        $msg = "已为 {$count} 张卡密增加 {$hours} 小时";
+        $msg   = "已为 {$count} 张卡密增加 {$hours} 小时";
     }
     elseif (isset($_POST['gen_cards'])) {
         try {
             $targetAppId = intval($_POST['app_id']);
-            $db->generateCards($_POST['num'], $_POST['type'], $_POST['pre'], '', 16, htmlspecialchars($_POST['note']), $targetAppId);
+            $db->generateCards(
+                $_POST['num'], $_POST['type'], $_POST['pre'],
+                '',16, htmlspecialchars($_POST['note']), $targetAppId
+            );
             $msg = "成功生成 {$_POST['num']} 张卡密";
-        } catch (Exception $e) { $errorMsg = "生成失败: " . htmlspecialchars($e->getMessage()); }
-    } elseif (isset($_POST['del_card'])) {
+        } catch (Exception $e) { $errorMsg = "生成失败: " . $e->getMessage(); }
+    }
+    elseif (isset($_POST['del_card'])) {
         $db->deleteCard($_POST['id']);
         $msg = "卡密已删除";
-    } elseif (isset($_POST['unbind_card'])) {
+    }
+    elseif (isset($_POST['unbind_card'])) {
         $res = $db->resetDeviceBindingByCardId($_POST['id']);
         $msg = $res ? "设备解绑成功" : "解绑失败";
-    } 
+    }
+    elseif (isset($_POST['ban_card'])) {
+        $db->updateCardStatus($_POST['id'], 2);
+        $msg = "卡密已封禁";
+    }
+    elseif (isset($_POST['unban_card'])) {
+        $db->updateCardStatus($_POST['id'], 1);
+        $msg = "卡密已解除封禁";
+    }
     elseif (isset($_POST['update_pwd'])) {
-        $pwd1 = $_POST['new_pwd'] ?? '';
+        $pwd1 = $_POST['new_pwd']?? '';
         $pwd2 = $_POST['confirm_pwd'] ?? '';
-        
-        if (empty($pwd1)) {
-            $errorMsg = "密码不能为空";
-        } elseif ($pwd1 !== $pwd2) {
-            $errorMsg = "两次输入的密码不一致，请重试";
-        } else {
+        if (empty($pwd1))$errorMsg = "密码不能为空";
+        elseif ($pwd1 !== $pwd2) $errorMsg = "两次输入的密码不一致";
+        else {
             $db->updateAdminPassword($pwd1);
             setcookie('admin_trust', '', time() - 3600, '/');
-            $msg = "管理员密码已更新，所有已登录的设备需重新登录";
+            $msg = "管理员密码已更新，信任设备需重新登录";
         }
-    } 
+    }
     elseif (isset($_POST['update_settings'])) {
         try {
             $uploadDir = 'uploads/';
             if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
 
-            $processUpload = function($inputName, $existingValue) use ($uploadDir) {
+            $processUpload = function ($inputName, $existingValue) use ($uploadDir) {
                 if (isset($_FILES[$inputName]) && $_FILES[$inputName]['error'] === UPLOAD_ERR_OK) {
                     $ext = strtolower(pathinfo($_FILES[$inputName]['name'], PATHINFO_EXTENSION));
-                    if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'ico'])) {
+                    if (in_array($ext, ['jpg','jpeg','png','gif','webp','ico','svg'])) {
                         $filename = $inputName . '_' . time() . '.' . $ext;
-                        move_uploaded_file($_FILES[$inputName]['tmp_name'], $uploadDir . $filename);
-                        return $uploadDir . $filename;
+                        move_uploaded_file($_FILES[$inputName]['tmp_name'], $uploadDir . $filename);return $uploadDir . $filename;
                     }
                 }
-                return $existingValue; 
+                return $existingValue;
             };
 
             $settingsData = [
-                'site_title' => trim($_POST['site_title']),
-                'favicon' => $processUpload('favicon_file', trim($_POST['favicon'])),
+                'site_title'   => trim($_POST['site_title']),
+                'favicon'      => $processUpload('favicon_file',trim($_POST['favicon'])),
                 'admin_avatar' => $processUpload('admin_avatar_file', trim($_POST['admin_avatar'])),
-                'bg_pc' => $processUpload('bg_pc_file', trim($_POST['bg_pc'])),
-                'bg_mobile' => $processUpload('bg_mobile_file', trim($_POST['bg_mobile'])),
-                // [新增] 保存背景模糊设置
-                'bg_blur' => isset($_POST['bg_blur']) ? '1' : '0'
-            ];
+                'bg_pc'        => $processUpload('bg_pc_file',        trim($_POST['bg_pc'])),
+                'bg_mobile'    => $processUpload('bg_mobile_file',    trim($_POST['bg_mobile'])),
+                'bg_blur'      => isset($_POST['bg_blur']) ? '1' : '0',];
             $db->saveSystemSettings($settingsData);
-            
+
             $newUsername = trim($_POST['admin_username']);
-            if(!empty($newUsername)) {
-                $db->updateAdminUsername($newUsername);
-            }
-            
+            if (!empty($newUsername)) $db->updateAdminUsername($newUsername);
+
             $msg = "系统配置已保存";
-            echo "<script>alert('$msg');location.href='cards.php?tab=settings';</script>"; 
-            exit;
-        } catch(Exception $e) {
-            $errorMsg = "保存失败: " . htmlspecialchars($e->getMessage());
-        }
-    }
-    elseif (isset($_POST['ban_card'])) {
-        $db->updateCardStatus($_POST['id'], 2);
-        $msg = "卡密已封禁";
-    } elseif (isset($_POST['unban_card'])) {
-        $db->updateCardStatus($_POST['id'], 1);
-        $msg = "卡密已解除封禁";
+            echo "<script>alert('{$msg}');location.href='cards.php?tab=settings';</script>";exit;
+        } catch (Exception $e) { $errorMsg = "保存失败: " . $e->getMessage(); }
     }
 }
 
-$dashboardData = ['stats'=>['total'=>0,'unused'=>0,'active'=>0], 'app_stats'=>[], 'chart_types'=>[]];
-$logs = [];
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// §9. 数据查询
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+$dashboardData = ['stats' => ['total' => 0, 'unused' => 0, 'active' => 0], 'app_stats' => [], 'chart_types' => []];
+$logs= [];
 $activeDevices = [];
-$cardList = [];
-$totalCards = 0;
-$totalPages = 0;
+$cardList      = [];
+$totalCards    = 0;
+$totalPages    = 0;
 
-try { $dashboardData = $db->getDashboardData(); } catch (Throwable $e) { $errorMsg .= " 仪表盘数据加载失败"; }
-try { $logs = $db->getUsageLogs(20, 0); } catch (Throwable $e) { }
-try { $activeDevices = $db->getActiveDevices(); } catch (Throwable $e) { }
+try { $dashboardData = $db->getDashboardData(); } catch (Throwable $e) { if (empty($errorMsg)) $errorMsg = "仪表盘数据加载失败"; }
+try { $logs          = $db->getUsageLogs(20, 0); } catch (Throwable $e) {}
+try { $activeDevices = $db->getActiveDevices();} catch (Throwable $e) {}
 
-$page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
-$perPage = isset($_GET['limit']) ? intval($_GET['limit']) : 20; 
-if ($perPage < 5) $perPage = 20;
-if ($perPage > 500) $perPage = 500;
+$page= max(1, intval($_GET['page']?? 1));
+$perPage = max(5, min(500, intval($_GET['limit'] ?? 20)));
 
 $statusFilter = null;
-$filterStr = $_GET['filter'] ?? 'all';
+$filterStr    = $_GET['filter'] ?? 'all';
 if ($filterStr === 'unused') $statusFilter = 0;
 elseif ($filterStr === 'active') $statusFilter = 1;
 elseif ($filterStr === 'banned') $statusFilter = 2;
 
-$appFilter = isset($_GET['app_id']) && $_GET['app_id'] !== '' ? intval($_GET['app_id']) : null;
-$isSearching = isset($_GET['q']) && !empty($_GET['q']);
-$offset = ($page - 1) * $perPage;
+$appFilter= isset($_GET['app_id']) && $_GET['app_id'] !== '' ? intval($_GET['app_id']) : null;
+$isSearching = isset($_GET['q']) && !empty(trim($_GET['q']));
+$offset= ($page - 1) * $perPage;
 
 try {
     if ($isSearching) {
-        $allResults = $db->searchCards($_GET['q']);
-        $totalCards = count($allResults);
-        $cardList = array_slice($allResults, $offset, $perPage);
+        $allResults = $db->searchCards($_GET['q']);$totalCards = count($allResults);$cardList   = array_slice($allResults, $offset, $perPage);
     } elseif ($appFilter !== null) {
         $totalCards = $db->getTotalCardCount($statusFilter, $appFilter);
-        $cardList = $db->getCardsPaginated($perPage, $offset, $statusFilter, $appFilter);
-    } else {
-        $totalCards = 0;
-        $cardList = [];
+        $cardList   = $db->getCardsPaginated($perPage, $offset, $statusFilter, $appFilter);
     }
-} catch (Throwable $e) { $errorMsg .= " 卡密列表加载失败: " . htmlspecialchars($e->getMessage()); }
+} catch (Throwable $e) { if (empty($errorMsg)) $errorMsg = "卡密列表加载失败"; }
 
-$totalPages = ceil($totalCards / $perPage);
-if ($totalPages > 0 && $page > $totalPages) { $page = $totalPages; }
+$totalPages = ceil($totalCards / max(1, $perPage));
+if ($totalPages > 0&& $page > $totalPages) $page = $totalPages;
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// §10. 辅助变量
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+$protocol= (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
+$currentScriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
+$apiUrl          = $protocol . '://' . $_SERVER['HTTP_HOST'] . $currentScriptDir . '/Verifyfile/api.php';
+$blur_val_admin  = ($conf_bg_blur === '1') ? '20px' : '0px';
+$statTotal       = $dashboardData['stats']['total']?? 0;
+$statActive      = $dashboardData['stats']['active'] ?? 0;
+$statUnused      = $dashboardData['stats']['unused'] ?? 0;
+$statApps        = count($appList);
 
 ?>
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title><?php echo htmlspecialchars($conf_site_title); ?></title>
-    <link rel="icon" href="<?php echo htmlspecialchars($conf_favicon); ?>" type="image/png">
-    
-    <link href="assets/css/all.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <script src="assets/js/chart.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title><?= htmlspecialchars($conf_site_title) ?> — <?= $currentTitle ?></title>
+<link rel="icon" href="<?= htmlspecialchars($conf_favicon) ?>" type="image/png">
+<link href="assets/css/all.min.css" rel="stylesheet">
+<script src="assets/js/chart.js"></script>
+<style>
+/* ═══════════════════════════════════════════════════════════V4 DESIGN SYSTEM
+   ═══════════════════════════════════════════════════════════ */
 
-    <style>
-        :root {
-            --sidebar-bg: rgba(22, 27, 46, 0.75);
-            --sidebar-text: #a0aec0;
-            --sidebar-active-bg: linear-gradient(90deg, rgba(99, 102, 241, 0.15), rgba(99, 102, 241, 0));
-            --sidebar-active-text: #fff;
-            --sidebar-border: 1px solid rgba(255, 255, 255, 0.08);
+:root {
+    --c-bg:#f0f2f7;
+    --c-surface:rgba(255,255,255,.72);
+    --c-surface-solid:#ffffff;
+    --c-surface-hover:rgba(255,255,255,.88);
+    --c-border:rgba(0,0,0,.06);
+    --c-border-active:rgba(99,102,241,.3);
+    --c-shadow:rgba(0,0,0,.04);
+    --c-shadow-lg:rgba(0,0,0,.08);
+    --c-text:#1a1a2e;
+    --c-text-secondary:#64748b;
+    --c-text-muted:#94a3b8;
+    --c-primary:#6366f1;
+    --c-primary-hover:#4f46e5;
+    --c-primary-light:rgba(99,102,241,.08);
+    --c-primary-glow:rgba(99,102,241,.25);
+    --c-success:#10b981;
+    --c-success-light:rgba(16,185,129,.1);
+    --c-danger:#f43f5e;
+    --c-danger-light:rgba(244,63,94,.08);
+    --c-warning:#f59e0b;
+    --c-warning-light:rgba(245,158,11,.1);
+    --c-info:#3b82f6;
+    --c-info-light:rgba(59,130,246,.1);
+    --radius-sm:10px;
+    --radius-md:16px;
+    --radius-lg:24px;
+    --radius-xl:28px;
+    --header-h:72px;
+    --ease:cubic-bezier(.4,0,.2,1);
+    --ease-spring:cubic-bezier(.34,1.56,.64,1);
+    --ease-out:cubic-bezier(.16,1,.3,1);
+}
 
-            --card-bg: rgba(255, 255, 255, 0.7);
-            --card-border: 1px solid rgba(255, 255, 255, 0.5);
-            --card-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
-            --card-radius: 24px;
-            
-            --text-main: #2d3748;
-            --text-muted: #718096;
-            
-            --primary: #6366f1; 
-            --primary-hover: #4f46e5;
-            --primary-glow: rgba(99, 102, 241, 0.3);
-            
-            --success: #10b981;
-            --danger: #f43f5e;
-            --warning: #f59e0b;
+/* ─── Sidebar Variables ─── */
+:root {
+    --sb-w:272px;
+    --sb-w-collapsed:78px;
+    --sb-bg:rgba(10,10,20,.88);
+    --sb-glass:blur(50px) saturate(200%);
+    --sb-text:rgba(255,255,255,.5);
+    --sb-text-hover:rgba(255,255,255,.85);
+    --sb-text-active:#fff;
+    --sb-accent:#818cf8;
+    --sb-accent-glow:rgba(129,140,248,.4);
+    --sb-divider:rgba(255,255,255,.04);
+    --sb-item-radius:14px;
+    --sb-item-h:44px;
+    --sb-transition:cubic-bezier(.4,0,.2,1);
+}
 
-            --input-radius: 14px;
-            --btn-radius: 14px;
-        }
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0 }
+html { -webkit-font-smoothing:antialiased }
+body {
+    font-family:'Inter',system-ui,-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+    color:var(--c-text); display:flex; height:100vh; overflow:hidden;
+    background:url('<?= htmlspecialchars($conf_bg_pc) ?>') center/cover fixed no-repeat var(--c-bg);
+}
+body::before {
+    content:''; position:fixed; inset:0; z-index:0; pointer-events:none;
+    background:rgba(240,242,247,.75);backdrop-filter:blur(<?= $blur_val_admin ?>) saturate(120%);
+    -webkit-backdrop-filter:blur(<?= $blur_val_admin ?>) saturate(120%);
+}
+@media(max-width:768px){
+    body { background-image:url('<?= htmlspecialchars($conf_bg_mobile) ?>')!important }
+}
 
-        * { box-sizing: border-box; outline: none; -webkit-tap-highlight-color: transparent; }
-        
-        body { 
-            margin: 0; 
-            font-family: 'Outfit', sans-serif; 
-            background-color: transparent;
-            color: var(--text-main); 
-            display: flex; 
-            height: 100vh; 
-            overflow: hidden; 
-            /* [移动端适配] 默认PC壁纸 */
-            background-image: url('<?php echo htmlspecialchars($conf_bg_pc); ?>');
-            background-size: cover;
-            background-position: center;
-            background-attachment: fixed;
-        }
+::-webkit-scrollbar { width:6px; height:6px }
+::-webkit-scrollbar-track { background:transparent }
+::-webkit-scrollbar-thumb { background:rgba(0,0,0,.1); border-radius:99px }
+::-webkit-scrollbar-thumb:hover { background:rgba(0,0,0,.2) }
 
-        /* [新增] 动态背景模糊图层 */
-        body::before {
-            content: "";
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none;
-            z-index: -1; /* 位于内容下方，背景图上方 */
-            backdrop-filter: blur(<?php echo $conf_bg_blur === '1' ? '20px' : '0px'; ?>);
-        }
-        
-        /* [移动端适配] 移动端壁纸 CSS切换 */
-        @media (max-width: 768px) {
-            body {
-                background-image: url('<?php echo htmlspecialchars($conf_bg_mobile); ?>') !important;
-            }
-        }
+/* ─── Sidebar─── */
+.sidebar {
+    width:var(--sb-w); flex-shrink:0; position:relative; z-index:100;
+    display:flex; flex-direction:column; background:var(--sb-bg);
+    backdrop-filter:var(--sb-glass); -webkit-backdrop-filter:var(--sb-glass);
+    border-right:1px solid rgba(255,255,255,.04);
+    transition:width .35s var(--sb-transition),transform .35s var(--sb-transition);
+    overflow:hidden;
+}
+.sidebar.collapsed { width:var(--sb-w-collapsed) }
+.sidebar.collapsed .sb-label,
+.sidebar.collapsed .sb-link-text,
+.sidebar.collapsed .sb-brand-text,
+.sidebar.collapsed .sb-user-info,
+.sidebar.collapsed .sb-collapse-text,
+.sidebar.collapsed .sb-badge { opacity:0; width:0; overflow:hidden }
+.sidebar.collapsed .sb-brand { padding:0 16px; justify-content:center }
+.sidebar.collapsed .sb-brand-icon { margin:0 }
+.sidebar.collapsed .sb-nav { padding:16px 12px }
+.sidebar.collapsed .sb-link {
+    padding:0; width:var(--sb-item-h); height:var(--sb-item-h);
+    justify-content:center; margin:0 auto4px;
+}
+.sidebar.collapsed .sb-link-icon { margin:0; font-size:18px }
+.sidebar.collapsed .sb-user { padding:12px; justify-content:center }
+.sidebar.collapsed .sb-avatar { margin:0 }
+.sidebar.collapsed .sb-logout { margin:4px auto 0 }
+.sidebar.collapsed .sb-collapse-btn { justify-content:center; padding:0 16px }
+.sidebar.collapsed .sb-collapse-btn i { transform:rotate(180deg) }
 
-        /* 侧边栏重构 */
-        aside { 
-            width: 270px; 
-            background: var(--sidebar-bg); 
-            backdrop-filter: blur(40px) saturate(180%);
-            -webkit-backdrop-filter: blur(40px) saturate(180%);
-            flex-shrink: 0; 
-            display: flex; 
-            flex-direction: column; 
-            border-right: var(--sidebar-border); 
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
-            z-index: 1000; 
-            box-shadow: 4px 0 24px rgba(0,0,0,0.1);
-        }
+/* Collapsed tooltips */
+.sidebar.collapsed .sb-link { position:relative }
+.sidebar.collapsed .sb-link::after {
+    content:attr(data-tooltip); position:absolute;
+    left:calc(100% + 12px); top:50%;
+    transform:translateY(-50%) scale(.9);
+    background:rgba(15,15,30,.95); color:#fff;
+    padding:6px 14px; border-radius:10px; font-size:12px; font-weight:600;
+    white-space:nowrap; opacity:0; pointer-events:none;
+    transition:all .2s var(--sb-transition);
+    box-shadow:0 8px 24px rgba(0,0,0,.3);
+    border:1px solid rgba(255,255,255,.08); z-index:1001;
+}
+.sidebar.collapsed .sb-link:hover::after {
+    opacity:1; transform:translateY(-50%) scale(1);
+}
 
-        .brand { 
-            height: 80px; 
-            display: flex; align-items: center; 
-            padding: 0 28px; 
-            color: white; 
-            font-weight: 700; font-size: 18px; 
-            letter-spacing: -0.5px;
-            background: linear-gradient(to bottom, rgba(255,255,255,0.05), transparent);
-            border-bottom: var(--sidebar-border);
-        }
-        .brand-logo { 
-            width: 36px; height: 36px; 
-            border-radius: 10px; margin-right: 14px; 
-            box-shadow: 0 0 15px rgba(99, 102, 241, 0.4);
-            border: 1px solid rgba(255,255,255,0.2);
-            object-fit: cover;
-        }
-        
-        .nav { flex: 1; padding: 24px 16px; overflow-y: auto; }
-        .nav-label { 
-            font-size: 11px; text-transform: uppercase; 
-            color: rgba(255,255,255,0.3); font-weight: 700; 
-            margin: 20px 0 10px 14px; letter-spacing: 1px; 
-        }
-        .nav a { 
-            display: flex; align-items: center; padding: 13px 18px; 
-            color: var(--sidebar-text); text-decoration: none; 
-            border-radius: var(--btn-radius); margin-bottom: 6px; 
-            font-size: 14px; font-weight: 500; 
-            transition: all 0.25s ease; 
-            position: relative;
-            overflow: hidden;
-        }
-        .nav a:hover { 
-            background: rgba(255, 255, 255, 0.08); 
-            color: white; 
-            transform: translateX(4px);
-        }
-        .nav a.active { 
-            background: var(--sidebar-active-bg); 
-            color: var(--sidebar-active-text); 
-            font-weight: 600;
-        }
-        .nav a.active::before {
-            content: ''; position: absolute; left: 0; top: 15%; height: 70%; width: 3px; 
-            background: #818cf8; border-radius: 0 4px 4px 0;
-            box-shadow: 0 0 12px #818cf8;
-        }
-        .nav a i { width: 24px; margin-right: 12px; font-size: 16px; opacity: 0.8; text-align: center; }
-        .nav a.active i { color: #818cf8; opacity: 1; }
+/* Brand */
+.sb-brand {
+    height:72px; padding:0 22px; display:flex; align-items:center;
+    gap:14px; flex-shrink:0; position:relative;
+    transition:all .3s var(--sb-transition);
+}
+.sb-brand::after {
+    content:''; position:absolute; bottom:0; left:20px; right:20px;
+    height:1px; background:linear-gradient(90deg,transparent,rgba(255,255,255,.06),transparent);
+}
+.sb-brand-icon {
+    width:38px; height:38px; border-radius:12px; flex-shrink:0;
+    position:relative; overflow:hidden;
+    box-shadow:0 0 20px rgba(99,102,241,.2);
+    transition:all .3s var(--sb-transition);
+}
+.sb-brand-icon img { width:100%; height:100%; object-fit:cover; border-radius:inherit }
+.sb-brand-icon::before {
+    content:''; position:absolute; inset:-1px; border-radius:inherit; padding:1.5px;
+    background:conic-gradient(from 180deg,var(--sb-accent),transparent40%,transparent 60%,var(--sb-accent));
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor; mask-composite:exclude;
+    animation:brandSpin 6s linear infinite;
+}
+@keyframes brandSpin { to { transform:rotate(360deg) } }
+.sb-brand-text { display:flex; flex-direction:column; transition:opacity .2s }
+.sb-brand-name { color:#fff; font-size:15px; font-weight:700; line-height:1.2; letter-spacing:-.3px }
+.sb-brand-sub{ color:rgba(255,255,255,.25); font-size:10px; font-weight:600; letter-spacing:1.5px; text-transform:uppercase; margin-top:3px }
 
-        .user-panel { 
-            margin: 20px; padding: 16px; 
-            background: rgba(255, 255, 255, 0.05); 
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 16px; 
-            display: flex; align-items: center; gap: 12px; 
-            backdrop-filter: blur(10px);
-        }
-        .avatar-img { width: 38px; height: 38px; border-radius: 10px; border: 2px solid rgba(255,255,255,0.1); object-fit: cover; }
-        .user-info div { font-size: 14px; color: white; font-weight: 600; }
-        .user-info span { font-size: 11px; color: rgba(255,255,255,0.4); }
-        .logout { margin-left: auto; color: rgba(255,255,255,0.5); cursor: pointer; transition: 0.2s; padding: 8px; border-radius: 8px; }
-        .logout:hover { color: #f43f5e; background: rgba(244, 63, 94, 0.1); }
-        
-        main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
-        
-        header { 
-            height: 80px; 
-            padding: 0 32px; 
-            display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; z-index: 10; 
-            margin: 0;
-            background: transparent;
-        }
-        .title { 
-            font-size: 22px; font-weight: 700; color: #1e293b; 
-            text-shadow: 0 2px 10px rgba(255,255,255,0.5);
-        }
-        
-        .content { flex: 1; overflow-y: auto; padding: 0 32px 32px; -webkit-overflow-scrolling: touch; }
-        
-        /* 玻璃拟态卡片升级 */
-        .panel, .stat-card { 
-            background: var(--card-bg); 
-            backdrop-filter: blur(25px) saturate(120%);
-            -webkit-backdrop-filter: blur(25px) saturate(120%);
-            border: var(--card-border); 
-            border-radius: var(--card-radius); 
-            box-shadow: var(--card-shadow);
-            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-            overflow: hidden; 
-        }
-        .panel:hover, .stat-card:hover { 
-            background: rgba(255, 255, 255, 0.8);
-            box-shadow: 0 15px 50px rgba(0, 0, 0, 0.1);
-            border-color: rgba(255,255,255,0.7);
-        }
-        
-        /* 顶部统计卡 Grid */
-        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-bottom: 32px; }
-        
-        /* [移动端适配] 底部图表 Grid (CSS 类控制，不再使用行内样式) */
-        .dashboard-split-grid {
-            display: grid; 
-            grid-template-columns: 2fr 1fr; 
-            gap: 24px; 
-            margin-bottom: 32px;
-        }
+/* Navigation */
+.sb-nav {
+    flex:1; overflow-y:auto; overflow-x:hidden; padding:20px 16px;
+    transition:padding .3s var(--sb-transition);
+    scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.08) transparent;
+}
+.sb-nav::-webkit-scrollbar { width:3px }
+.sb-nav::-webkit-scrollbar-thumb { background:rgba(255,255,255,.1); border-radius:99px }
+.sb-label {
+    font-size:10px; text-transform:uppercase; color:rgba(255,255,255,.2);
+    font-weight:700; letter-spacing:1.5px; padding:20px 14px 10px;
+    transition:opacity .2s; user-select:none;
+}
+.sb-label:first-child { padding-top:4px }
+.sb-link {
+    display:flex; align-items:center; height:var(--sb-item-h); padding:0 14px;
+    color:var(--sb-text); text-decoration:none; border-radius:var(--sb-item-radius);
+    font-size:13.5px; font-weight:500; margin-bottom:2px;
+    transition:all .25s var(--sb-transition); position:relative; overflow:hidden; cursor:pointer;
+}
+.sb-link::before {
+    content:''; position:absolute; inset:0; border-radius:inherit; opacity:0;
+    transition:opacity .25s;background:linear-gradient(135deg,rgba(255,255,255,.06),rgba(255,255,255,.02));
+}
+.sb-link:hover::before { opacity:1 }
+.sb-link:hover { color:var(--sb-text-hover); transform:translateX(2px) }
+.sb-link.active {
+    color:var(--sb-text-active); font-weight:600;
+    background:linear-gradient(135deg,rgba(129,140,248,.12),rgba(129,140,248,.04));
+}
+.sb-link.active::before { opacity:0 }
+.sb-link.active::after {
+    content:''; position:absolute; left:0; top:8px; bottom:8px; width:3px;
+    background:var(--sb-accent); border-radius:0 6px 6px 0;
+    box-shadow:0 0 12px var(--sb-accent-glow),0 0 4px var(--sb-accent);animation:indicatorPulse 2s ease-in-out infinite;
+}
+@keyframes indicatorPulse {
+    0%,100% { box-shadow:0 0 12px var(--sb-accent-glow),0 0 4px var(--sb-accent) }
+    50%{ box-shadow:0 0 20px var(--sb-accent-glow),0 0 8px var(--sb-accent) }
+}
+.sb-link-icon {
+    width:20px; height:20px; display:flex; align-items:center; justify-content:center;
+    margin-right:12px; font-size:15px; flex-shrink:0;
+    transition:all .25s var(--sb-transition); position:relative;
+}
+.sb-link:hover .sb-link-icon { transform:scale(1.1) }
+.sb-link.active .sb-link-icon { color:var(--sb-accent); filter:drop-shadow(0 0 6px var(--sb-accent-glow)) }
+.sb-link-text { white-space:nowrap; transition:opacity .15s; flex:1 }
+.sb-badge {
+    margin-left:auto; padding:2px 8px; border-radius:99px; font-size:10px; font-weight:700;
+    background:rgba(129,140,248,.15); color:var(--sb-accent);
+    transition:opacity .15s; min-width:20px; text-align:center;
+}
+.sb-divider {
+    height:1px; margin:12px 14px;
+    background:linear-gradient(90deg,transparent,var(--sb-divider),rgba(255,255,255,.08),var(--sb-divider),transparent);
+}
+.sb-link-glow {
+    position:absolute; inset:0; border-radius:inherit; opacity:0; transition:opacity .3s;
+    background:radial-gradient(circle at var(--glow-x,50%) var(--glow-y,50%),rgba(129,140,248,.08),transparent60%);
+    pointer-events:none;
+}
+.sb-link:hover .sb-link-glow { opacity:1 }
 
-        .stat-card { padding: 24px; position: relative; display: flex; flex-direction: column; justify-content: center; }
-        .stat-label { color: var(--text-muted); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-        .stat-value { font-size: 36px; font-weight: 700; color: #1e293b; letter-spacing: -1.5px; line-height: 1; }
-        .stat-icon { 
-            position: absolute; right: 20px; top: 50%; transform: translateY(-50%);
-            width: 56px; height: 56px; border-radius: 16px; 
-            display: flex; align-items: center; justify-content: center; font-size: 24px; 
-            opacity: 0.9;
-        }
-        
-        .stat-card:nth-child(1) .stat-icon { background: linear-gradient(135deg, #dbeafe, #bfdbfe); color: #2563eb; }
-        .stat-card:nth-child(2) .stat-icon { background: linear-gradient(135deg, #d1fae5, #a7f3d0); color: #059669; }
-        .stat-card:nth-child(3) .stat-icon { background: linear-gradient(135deg, #ede9fe, #ddd6fe); color: #7c3aed; }
-        .stat-card:nth-child(4) .stat-icon { background: linear-gradient(135deg, #ffedd5, #fed7aa); color: #ea580c; }
+/* Collapse Toggle */
+.sb-collapse-btn {
+    display:flex; align-items:center; gap:10px; padding:0 22px; height:48px;
+    color:rgba(255,255,255,.3); font-size:12px; font-weight:600;
+    cursor:pointer; transition:all .2s; border:none; background:none;
+    width:100%; border-top:1px solid var(--sb-divider);
+}
+.sb-collapse-btn:hover { color:rgba(255,255,255,.6) }
+.sb-collapse-btn i { font-size:14px; transition:transform .3s var(--sb-transition) }
 
-        .panel { margin-bottom: 28px; }
-        .panel-head { 
-            padding: 20px 28px; 
-            border-bottom: 1px solid rgba(0,0,0,0.03); 
-            display: flex; justify-content: space-between; align-items: center; 
-            background: rgba(255, 255, 255, 0.3); 
-            flex-wrap: wrap; gap: 10px; 
-        }
-        .panel-title { font-size: 16px; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 8px; }
-        
-        .table-responsive { width: 100%; overflow-x: auto; border-radius: 0 0 var(--card-radius) var(--card-radius); }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
-        th { 
-            text-align: left; padding: 18px 28px; 
-            background: rgba(248, 250, 252, 0.5); 
-            color: #64748b; font-weight: 600; 
-            text-transform: uppercase; font-size: 11px; letter-spacing: 0.8px; 
-            border-bottom: 1px solid rgba(0,0,0,0.03);
-        }
-        th:first-child { border-top-left-radius: 0; }
-        th:last-child { border-top-right-radius: 0; }
-        
-        td { padding: 18px 28px; border-bottom: 1px solid rgba(0,0,0,0.02); color: var(--text-main); vertical-align: middle; transition: all 0.2s; }
-        tr:last-child td { border-bottom: none; }
-        tr:hover td { background: rgba(255, 255, 255, 0.6); }
-        
-        .badge { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; line-height: 1.4; letter-spacing: 0.3px; }
-        .badge-success { background: rgba(16, 185, 129, 0.12); color: #047857; }
-        .badge-warn { background: rgba(245, 158, 11, 0.12); color: #b45309; }
-        .badge-danger { background: rgba(244, 63, 94, 0.12); color: #be123c; }
-        .badge-neutral { background: rgba(148, 163, 184, 0.15); color: #475569; }
-        .badge-primary { background: rgba(99, 102, 241, 0.12); color: #4338ca; }
-        
-        .code { 
-            font-family: 'JetBrains Mono', monospace; 
-            background: rgba(255,255,255,0.6); 
-            padding: 6px 12px; border-radius: 8px; 
-            font-size: 12px; color: #334155; 
-            border: 1px solid rgba(0,0,0,0.04); 
-            cursor: pointer; transition: all 0.2s; 
-            font-weight: 500;
-        }
-        .code:hover { background: #fff; border-color: #818cf8; color: #4f46e5; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15); }
-        
-        .btn { 
-            display: inline-flex; align-items: center; padding: 9px 18px; 
-            border-radius: var(--btn-radius); font-size: 13px; font-weight: 600; 
-            cursor: pointer; transition: all 0.2s ease; 
-            border: 1px solid transparent; text-decoration: none; justify-content: center; 
-        }
-        .btn:hover { transform: translateY(-2px); filter: brightness(1.05); }
-        .btn:active { transform: translateY(0); }
-        
-        .btn-primary { background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: white; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3); }
-        .btn-danger { background: #fff1f2; color: #be123c; border-color: #fecdd3; }
-        .btn-danger:hover { background: #ffe4e6; box-shadow: 0 4px 12px rgba(244, 63, 94, 0.15); }
-        .btn-warning { background: #fff7ed; color: #c2410c; border-color: #fed7aa; }
-        .btn-secondary { background: #f8fafc; color: #475569; border-color: #e2e8f0; }
-        .btn-icon { padding: 9px; min-width: 36px; height: 36px; }
+/* User Panel */
+.sb-user {
+    margin:12px 14px; padding:14px 16px;
+    background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.04);
+    border-radius:var(--sb-item-radius); display:flex; align-items:center; gap:12px;
+    transition:all .3s var(--sb-transition); position:relative; overflow:hidden;
+}
+.sb-user::before {
+    content:''; position:absolute; inset:0; border-radius:inherit; opacity:0;
+    background:linear-gradient(135deg,rgba(129,140,248,.05),transparent);
+    transition:opacity .3s;
+}
+.sb-user:hover::before { opacity:1 }
+.sb-avatar {
+    width:34px; height:34px; border-radius:10px; object-fit:cover;
+    border:1.5px solid rgba(255,255,255,.08); flex-shrink:0;
+    transition:all .3s var(--sb-transition);
+}
+.sb-user-info { display:flex; flex-direction:column; transition:opacity .15s; flex:1; min-width:0 }
+.sb-uname { font-size:13px; color:#fff; font-weight:600; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.sb-urole {
+    font-size:10px; color:rgba(255,255,255,.3); font-weight:500;
+    display:flex; align-items:center; gap:4px; margin-top:2px;
+}
+.sb-urole::before {
+    content:''; width:5px; height:5px; border-radius:50%;
+    background:#10b981; box-shadow:0 0 6px rgba(16,185,129,.5);
+    animation:onlinePulse 2s ease-in-out infinite;
+}
+@keyframes onlinePulse { 0%,100% { opacity:1 } 50% { opacity:.5 } }
+.sb-logout {
+    color:rgba(255,255,255,.3); cursor:pointer; padding:8px; border-radius:10px;
+    transition:all .2s; text-decoration:none;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+}
+.sb-logout:hover { color:#f43f5e; background:rgba(244,63,94,.1); transform:scale(1.05) }
 
-        .form-control { 
-            width: 100%; padding: 12px 16px; 
-            border: 1px solid rgba(203, 213, 225, 0.8); 
-            border-radius: var(--input-radius); margin-bottom: 16px; font-size: 14px; 
-            -webkit-appearance: none; background: rgba(255,255,255,0.7); 
-            transition: all 0.2s; 
-        }
-        .form-control:focus { background: #fff; border-color: #6366f1; box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1); }
-        
-        .toast { position: fixed; bottom: 30px; right: 30px; background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(12px); color: #1e293b; padding: 14px 24px; border-radius: 16px; opacity: 0; transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1); transform: translateY(20px); z-index: 2000; font-size: 14px; font-weight: 500; box-shadow: 0 10px 30px -5px rgba(0,0,0,0.1); border: 1px solid rgba(0,0,0,0.05); display: flex; align-items: center; }
-        .toast.show { opacity: 1; transform: translateY(0); }
-        .toast i { color: #10b981; font-size: 18px; margin-right: 10px; }
-        
-        .nav-segment { 
-            background: rgba(255, 255, 255, 0.25); 
-            backdrop-filter: blur(12px);
-            padding: 5px; border-radius: 14px; display: inline-flex; 
-            border: 1px solid rgba(255,255,255,0.4); 
-            margin-bottom: 24px; width: 100%; overflow-x: auto; 
-        }
-        .nav-pill { 
-            padding: 10px 24px; border-radius: 10px; 
-            font-size: 13px; font-weight: 600; color: var(--text-muted); 
-            background: transparent; border: none; cursor: pointer; 
-            transition: all 0.2s; white-space: nowrap; text-decoration: none; 
-            display: inline-block; text-align: center; flex: 1;
-        }
-        .nav-pill:hover { color: #1e293b; background: rgba(255,255,255,0.3); }
-        .nav-pill.active { 
-            background: #fff; color: #4f46e5; 
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05); 
-        }
-        
-        .chrome-tabs { 
-            display: flex; align-items: center; gap: 8px; padding: 12px 32px 0; 
-            margin-bottom: 0; flex-wrap: nowrap; overflow-x: auto; 
-            mask-image: linear-gradient(to right, black 95%, transparent 100%);
-        }
-        .chrome-tab { 
-            position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 20px; 
-            background: rgba(255,255,255,0.35); 
-            border: 1px solid rgba(255, 255, 255, 0.3); 
-            border-radius: 12px; 
-            font-size: 13px; color: #64748b; font-weight: 600;
-            cursor: pointer; transition: all 0.2s; text-decoration: none; white-space: nowrap; 
-        }
-        .chrome-tab:hover { background: rgba(255, 255, 255, 0.6); transform: translateY(-1px); }
-        .chrome-tab.active { 
-            background: rgba(255, 255, 255, 0.85); color: #4f46e5; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            border-color: rgba(255,255,255,0.8);
-        }
-        
-        details.panel > summary { list-style: none; cursor: pointer; transition: 0.2s; user-select: none; outline: none; }
-        details.panel > summary::-webkit-details-marker { display: none; }
-        details.panel > summary:hover { background: rgba(255, 255, 255, 0.4); }
-        
-        .menu-toggle { display: none; background: none; border: none; font-size: 20px; color: #1e293b; cursor: pointer; padding: 0 10px 0 0; }
-        .sidebar-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.4); z-index: 999; backdrop-filter: blur(4px); }
-        
-        .breadcrumb-bar { 
-            padding: 8px 32px 4px; font-size: 12px; color: #64748b; 
-            display: flex; align-items: center; gap: 8px; font-weight: 500; 
-        }
-        .announcement-box { 
-            background: linear-gradient(135deg, rgba(238, 242, 255, 0.8) 0%, rgba(255, 255, 255, 0.8) 100%); 
-            border: 1px solid rgba(255,255,255,0.6);
-            backdrop-filter: blur(10px);
-            border-radius: var(--card-radius);
-            animation: slideDown 0.5s cubic-bezier(0.2, 0.8, 0.2, 1); 
-            box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.15);
-        }
-        .panel.announcement-box:hover {
-            background: linear-gradient(135deg, rgba(238, 242, 255, 0.9) 0%, rgba(255, 255, 255, 0.95) 100%);
-            border-color: rgba(255,255,255,0.9);
-        }
+.sb-overlay {
+    display:none; position:fixed; inset:0; z-index:99;
+    background:rgba(0,0,0,.45);
+    backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+}
+.sb-overlay.show { display:block }
 
-        .modal-bg { backdrop-filter: blur(8px); background: rgba(15, 23, 42, 0.2); }
-        .modal-content { 
-            background: rgba(255, 255, 255, 0.85); 
-            backdrop-filter: blur(25px); 
-            border: 1px solid rgba(255,255,255,0.8);
-            border-radius: 24px; 
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); 
-        }
-        
-        .file-input-group { position: relative; display: flex; align-items: center; width: 100%; margin-bottom: 0; }
-        .file-input-group .form-control { margin-bottom: 0; padding-right: 50px; }
-        .file-input-group .upload-btn-overlay { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border-radius: 8px; background: rgba(99, 102, 241, 0.1); color: #6366f1; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; }
-        .file-input-group .upload-btn-overlay:hover { background: #6366f1; color: white; }
-        .hidden-file { display: none !important; }
-        .file-preview { margin-top: 6px; margin-bottom: 16px; font-size: 12px; color: #64748b; display: flex; align-items: center; gap: 6px; }
-        .file-preview i { color: #10b981; }
+/*─── Main Layout ─── */
+.main { flex:1; display:flex; flex-direction:column; overflow:hidden; position:relative; z-index:1}
+.top-bar {
+    height:var(--header-h); padding:0 32px;
+    display:flex; align-items:center; justify-content:space-between;
+    flex-shrink:0; gap:16px;
+}
+.top-left{ display:flex; align-items:center; gap:12px }
+.menu-btn{ display:none; background:none; border:none; font-size:20px; color:var(--c-text); cursor:pointer; padding:8px }
+.top-title { font-size:22px; font-weight:800; color:var(--c-text); letter-spacing:-.5px; display:flex; align-items:center; gap:10px }
+.top-title i { font-size:18px; color:var(--c-primary); opacity:.8 }
+.top-right { display:flex; align-items:center; gap:10px }
+.breadcrumb { padding:0 32px 8px; font-size:12px; color:var(--c-text-muted); display:flex; align-items:center; gap:6px; font-weight:500 }
+.breadcrumb i { font-size:8px; opacity:.4 }
+.content { flex:1; overflow-y:auto; padding:0 32px 40px; scroll-behavior:smooth }
 
-        .create-wrapper, .settings-wrapper { max-width: 1000px; margin: 20px auto; width: 100%; }
-        .create-panel, .settings-panel { min-height: 500px; }
-        .create-body { padding: 32px; display: grid; grid-template-columns: 2fr 1fr; gap: 40px; }
-        .create-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .full-width { grid-column: span 2; }
-        .form-section { display: flex; flex-direction: column; gap: 8px; }
-        .form-section label { font-weight: 600; font-size: 13px; color: #475569; display: flex; align-items: center; gap: 6px; }
-        .form-section label i { color: var(--primary); }
-        .big-select { padding: 16px; font-size: 15px; border: 2px solid var(--primary-glow); background-color: #f8faff; font-weight: 600; color: var(--primary); }
-        .big-btn { grid-column: span 2; padding: 16px; font-size: 15px; margin-top: 10px; box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.4); }
-        .create-decoration { background: linear-gradient(145deg, #f1f5f9 0%, #ffffff 100%); border-radius: 20px; padding: 24px; border: 1px solid rgba(0,0,0,0.05); display: flex; flex-direction: column; gap: 16px; }
-        .tip-card { background: rgba(99, 102, 241, 0.05); padding: 16px; border-radius: 12px; border-left: 3px solid var(--primary); }
-        .tip-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; color: #334155; }
-        .tip-content { font-size: 12px; color: #64748b; line-height: 1.5; }
+/* ─── Cards ─── */
+.card {
+    background:var(--c-surface);
+    backdrop-filter:blur(20px) saturate(120%); -webkit-backdrop-filter:blur(20px) saturate(120%);
+    border:1px solid var(--c-border); border-radius:var(--radius-lg);
+    box-shadow:0 4px 24px var(--c-shadow); transition:all .3s var(--ease);
+    overflow:hidden; margin-bottom:24px;
+}
+.card:hover { background:var(--c-surface-hover); box-shadow:0 12px 40px var(--c-shadow-lg); border-color:rgba(0,0,0,.08) }
+.card-head {
+    padding:20px 28px; display:flex; justify-content:space-between;
+    align-items:center; border-bottom:1px solid var(--c-border);
+    flex-wrap:wrap; gap:12px;
+}
+.card-title { font-size:15px; font-weight:700; color:var(--c-text); display:flex; align-items:center; gap:8px }
+.card-title i { color:var(--c-primary); font-size:14px }
+.card-body { padding:24px 28px }
 
-        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-        .setting-card { background: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.5); border-radius: 16px; padding: 24px; }
-        .setting-card-title { font-size: 15px; font-weight: 700; color: #1e293b; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,0,0,0.05); }
-        .setting-card-title i { color: var(--primary); }
+/* ─── Stats ─── */
+.stats { display:grid; grid-template-columns:repeat(4,1fr); gap:20px; margin-bottom:28px }
+.stat {
+    background:var(--c-surface); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+    border:1px solid var(--c-border); border-radius:var(--radius-lg);
+    padding:24px; position:relative; overflow:hidden;
+    transition:all .3s var(--ease); cursor:default;
+}
+.stat:hover { transform:translateY(-4px); box-shadow:0 16px 40px var(--c-shadow-lg) }
+.stat-label { font-size:12px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:8px }
+.stat-value { font-size:36px; font-weight:800; color:var(--c-text); letter-spacing:-2px; line-height:1 }
+.stat-icon {
+    position:absolute; right:20px; top:50%; transform:translateY(-50%);
+    width:52px; height:52px; border-radius:14px;
+    display:flex; align-items:center; justify-content:center; font-size:22px;
+}
+.stat:nth-child(1) .stat-icon { background:linear-gradient(135deg,#dbeafe,#bfdbfe); color:#2563eb }
+.stat:nth-child(2) .stat-icon { background:linear-gradient(135deg,#d1fae5,#a7f3d0); color:#059669 }
+.stat:nth-child(3) .stat-icon { background:linear-gradient(135deg,#ede9fe,#ddd6fe); color:#7c3aed }
+.stat:nth-child(4) .stat-icon { background:linear-gradient(135deg,#ffedd5,#fed7aa); color:#ea580c }
+.stat::after { content:''; position:absolute; bottom:0; left:0; right:0; height:3px; border-radius:0 0 var(--radius-lg) var(--radius-lg) }
+.stat:nth-child(1)::after { background:linear-gradient(90deg,#3b82f6,#60a5fa) }
+.stat:nth-child(2)::after { background:linear-gradient(90deg,#10b981,#34d399) }
+.stat:nth-child(3)::after { background:linear-gradient(90deg,#8b5cf6,#a78bfa) }
+.stat:nth-child(4)::after { background:linear-gradient(90deg,#f59e0b,#fbbf24) }
 
-        @media (max-width: 1024px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } }
-        
-        /* [移动端适配] 修复移动端布局 */
-        @media (max-width: 768px) {
-            aside { position: fixed; top: 0; left: 0; height: 100%; transform: translateX(-100%); box-shadow: 10px 0 30px rgba(0,0,0,0.2); }
-            aside.open { transform: translateX(0); }
-            .sidebar-overlay.show { display: block; }
-            .menu-toggle { display: block; }
-            header { padding: 0 20px; }
-            /* 增加底部padding防止被遮挡 */
-            .content { padding: 0 16px 80px; }
-            .grid-4 { grid-template-columns: 1fr; gap: 16px; }
-            /* 强制图表区域堆叠 */
-            .dashboard-split-grid { grid-template-columns: 1fr !important; }
-            
-            .panel-head { flex-direction: column; align-items: flex-start; gap: 12px; }
-            .panel-head .btn, .panel-head input { width: 100%; margin: 0 !important; }
-            .panel-head > div { width: 100%; }
-            .stat-value { font-size: 28px; }
-            .stat-icon { width: 48px; height: 48px; font-size: 20px; }
-            td, th { padding: 14px 20px; }
-            .chrome-tabs { padding: 12px 16px 0; }
-            .breadcrumb-bar { padding: 8px 20px 4px; }
-            
-            .create-body { grid-template-columns: 1fr; padding: 20px; gap: 20px; }
-            .create-form-grid { grid-template-columns: 1fr; }
-            .full-width { grid-column: span 1; }
-            .big-btn { grid-column: span 1; }
-            
-            .settings-grid { grid-template-columns: 1fr; }
-            
-            /* 增强标题可见度 */
-            header .title { font-size: 20px; text-shadow: 0 0 10px rgba(255,255,255,0.8); }
-        }
-        @keyframes slideDown { from { opacity: 0; transform: translateY(-15px); } to { opacity: 1; transform: translateY(0); } }
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2000; justify-content: center; align-items: center; }
-        .modal.show { display: flex; }
-        .modal-bg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        .modal-content { position: relative; width: 90%; max-width: 420px; padding: 28px; animation: modalPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
-        @keyframes modalPop { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-        .password-wrapper { position: relative; margin-bottom: 16px; }
-        .password-wrapper input { padding-right: 40px; margin-bottom: 0; }
-        .toggle-pwd { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); cursor: pointer; color: #94a3b8; padding: 5px; z-index: 5; }
-        .toggle-pwd:hover { color: var(--primary); }
-    </style>
+/* ─── Tables ─── */
+.table-wrap { width:100%; overflow-x:auto }
+table { width:100%; border-collapse:collapse; font-size:13px; white-space:nowrap }
+th {
+    text-align:left; padding:14px 24px;
+    background:rgba(248,250,252,.5); color:var(--c-text-muted);
+    font-weight:700; text-transform:uppercase; font-size:11px; letter-spacing:.8px;
+    border-bottom:1px solid var(--c-border);
+}
+td { padding:16px 24px; border-bottom:1px solid var(--c-border); color:var(--c-text); vertical-align:middle; transition:background .2s }
+tr:last-child td { border-bottom:none }
+tr:hover td { background:rgba(99,102,241,.02) }
+
+/* ─── Badges ─── */
+.badge { display:inline-flex; align-items:center; padding:4px 12px; border-radius:20px; font-size:11px; font-weight:700; line-height:1.4; letter-spacing:.3px; gap:4px }
+.badge-success { background:var(--c-success-light); color:#047857 }
+.badge-danger{ background:var(--c-danger-light);  color:#be123c }
+.badge-warn    { background:var(--c-warning-light); color:#b45309 }
+.badge-neutral { background:rgba(148,163,184,.12);  color:#475569 }
+.badge-primary { background:var(--c-primary-light); color:#4338ca }
+.badge-info    { background:var(--c-info-light);    color:#1d4ed8 }
+.badge::before { content:''; width:6px; height:6px; border-radius:50% }
+.badge-success::before { background:#10b981 }
+.badge-danger::before  { background:#f43f5e }
+.badge-warn::before    { background:#f59e0b }
+.badge-neutral::before { background:#94a3b8 }
+.badge-primary::before { background:#6366f1 }
+
+/* ─── Buttons ─── */
+.btn {
+    display:inline-flex; align-items:center; justify-content:center; gap:6px;
+    padding:10px 20px; border-radius:var(--radius-md); font-size:13px; font-weight:600;
+    cursor:pointer; transition:all .2s var(--ease); border:1px solid transparent;
+    text-decoration:none; line-height:1.4;
+}
+.btn:hover  { transform:translateY(-1px) }
+.btn:active { transform:translateY(0) scale(.98) }
+.btn-primary{ background:linear-gradient(135deg,#6366f1,#4f46e5); color:#fff; box-shadow:0 4px 16px var(--c-primary-glow) }
+.btn-primary:hover { box-shadow:0 8px 24px var(--c-primary-glow) }
+.btn-secondary { background:var(--c-surface-solid); color:var(--c-text-secondary); border-color:var(--c-border) }
+.btn-secondary:hover { background:#f8fafc; border-color:rgba(0,0,0,.1) }
+.btn-danger    { background:var(--c-danger-light);  color:#be123c; border-color:rgba(244,63,94,.15) }
+.btn-danger:hover { background:rgba(244,63,94,.15); box-shadow:0 4px 12px rgba(244,63,94,.15) }
+.btn-warning   { background:var(--c-warning-light); color:#b45309; border-color:rgba(245,158,11,.15) }
+.btn-success   { background:var(--c-success-light); color:#047857; border-color:rgba(16,185,129,.15) }
+.btn-ghost     { background:transparent; color:var(--c-text-muted); border:none; padding:8px }
+.btn-ghost:hover { background:var(--c-primary-light); color:var(--c-primary) }
+.btn-icon{ padding:8px; min-width:36px; height:36px }
+.btn-group     { display:flex; gap:6px; flex-wrap:wrap }
+
+/* ─── Forms ─── */
+.form-group{ margin-bottom:18px }
+.form-label  { display:block; font-size:13px; font-weight:600; color:var(--c-text-secondary); margin-bottom:8px }
+.form-label i { color:var(--c-primary); margin-right:4px }
+.form-input {
+    width:100%; padding:12px16px; border:1.5px solid var(--c-border);
+    border-radius:var(--radius-md); font-size:14px; color:var(--c-text);
+    background:var(--c-surface); transition:all .25s var(--ease); -webkit-appearance:none;
+}
+.form-input:focus { outline:none; border-color:var(--c-primary); box-shadow:0 0 0 4px var(--c-primary-light); background:var(--c-surface-solid) }
+.form-input::placeholder { color:var(--c-text-muted) }
+select.form-input { cursor:pointer }
+textarea.form-input { resize:vertical; min-height:80px }
+.code {
+    font-family:'JetBrains Mono',monospace; background:var(--c-surface-solid);
+    padding:6px 12px; border-radius:8px; font-size:12px; color:var(--c-text);
+    border:1px solid var(--c-border); cursor:pointer; transition:all .2s;
+    font-weight:500; display:inline-flex; align-items:center; gap:6px;
+}
+.code:hover { border-color:var(--c-primary); color:var(--c-primary); box-shadow:0 2px 8px var(--c-primary-light) }
+.code i { font-size:10px; opacity:.5 }
+.key-box {
+    display:inline-flex; align-items:center; gap:8px;
+    font-family:'JetBrains Mono',monospace; font-size:11px;
+    background:rgba(248,250,252,.8); padding:6px 12px; border-radius:8px;
+    border:1px solid var(--c-border); color:var(--c-text-secondary);
+    cursor:pointer; transition:all .2s;
+}
+.key-box:hover { border-color:var(--c-primary); color:var(--c-primary) }
+.key-box i { font-size:10px; opacity:.5 }
+
+/* ─── Toast─── */
+.toast {
+    position:fixed; bottom:30px; right:30px; z-index:9999;
+    display:flex; align-items:center; gap:10px;
+    background:var(--c-surface-solid); border:1px solid var(--c-border);
+    padding:14px 24px; border-radius:var(--radius-md);
+    box-shadow:0 12px 40px rgba(0,0,0,.12); font-size:14px; font-weight:500;
+    opacity:0; transform:translateY(20px); transition:all .35s var(--ease-spring);
+}
+.toast.show { opacity:1; transform:translateY(0) }
+.toast i { color:var(--c-success); font-size:18px }
+
+/* ─── Message Pills ─── */
+.msg-pill {
+    font-size:13px; padding:8px 16px; border-radius:var(--radius-sm);
+    font-weight:600; display:flex; align-items:center; gap:6px;
+    animation:fadeSlide .4s var(--ease-out);
+}
+@keyframes fadeSlide { from { opacity:0; transform:translateX(10px) } to { opacity:1; transform:translateX(0) } }
+.msg-success { color:#059669; background:var(--c-success-light) }
+.msg-error   { color:#dc2626; background:var(--c-danger-light) }
+
+/* ─── Modal ─── */
+.modal { display:none; position:fixed; inset:0; z-index:2000; align-items:center; justify-content:center }
+.modal.show { display:flex }
+.modal-bg { position:absolute; inset:0; background:rgba(15,23,42,.25); backdrop-filter:blur(8px) }
+.modal-box {
+    position:relative; width:90%; max-width:440px; padding:32px;
+    background:var(--c-surface-solid); backdrop-filter:blur(25px);
+    border:1px solid var(--c-border); border-radius:var(--radius-xl);
+    box-shadow:0 25px 60px rgba(0,0,0,.2); animation:modalPop .35s var(--ease-spring);
+}
+@keyframes modalPop { from { opacity:0; transform:scale(.92) translateY(10px) } to { opacity:1; transform:scale(1) translateY(0) } }
+.modal-title { font-size:18px; font-weight:800; margin-bottom:24px; color:var(--c-text) }
+
+/* ─── Tab Pills ─── */
+.pill-tabs {
+    display:inline-flex; background:var(--c-surface); border:1px solid var(--c-border);
+    border-radius:var(--radius-md); padding:4px; gap:2px;
+    margin-bottom:24px; overflow-x:auto; width:100%;
+}
+.pill {
+    flex:1; padding:10px 20px; border-radius:var(--radius-sm); font-size:13px; font-weight:600;
+    color:var(--c-text-muted); background:transparent; border:none; cursor:pointer;
+    transition:all .2s; white-space:nowrap; text-decoration:none; text-align:center; min-width:max-content;
+}
+.pill:hover  { color:var(--c-text); background:rgba(99,102,241,.04) }
+.pill.active { background:var(--c-surface-solid); color:var(--c-primary); box-shadow:0 2px 8px var(--c-shadow) }
+
+/* ─── Dashboard ─── */
+.welcome-card { background:linear-gradient(135deg,rgba(99,102,241,.06),rgba(59,130,246,.04)); border:1px solid rgba(99,102,241,.1); position:relative; overflow:hidden }
+.welcome-card::before {
+    content:''; position:absolute; top:-50%; right:-20%; width:300px; height:300px;
+    background:radial-gradient(circle,rgba(99,102,241,.08),transparent 70%);
+    border-radius:50%; pointer-events:none;
+}
+.welcome-inner { padding:28px; display:flex; gap:20px; align-items:flex-start; position:relative; z-index:1 }
+.welcome-icon {
+    width:52px; height:52px; border-radius:16px; flex-shrink:0;
+    background:linear-gradient(135deg,#6366f1,#8b5cf6);
+    display:flex; align-items:center; justify-content:center;
+    color:#fff; font-size:22px; box-shadow:0 8px 24px rgba(99,102,241,.3);
+}
+.welcome-title { font-size:18px; font-weight:800; color:var(--c-text); margin-bottom:6px }
+.welcome-desc{ font-size:13px; color:var(--c-text-secondary); line-height:1.6 }
+.version-badge { font-size:10px; background:var(--c-primary); color:#fff; padding:4px 10px; border-radius:20px; font-weight:700; letter-spacing:.5px }
+.split-grid{ display:grid; grid-template-columns:2fr 1fr; gap:24px; margin-bottom:24px }
+.progress{ height:6px; background:rgba(0,0,0,.04); border-radius:3px; overflow:hidden; flex:1; min-width:60px }
+.progress-bar{ height:100%; border-radius:3px; background:linear-gradient(90deg,var(--c-primary),#818cf8); transition:width .6s var(--ease) }
+
+/* ─── Create─── */
+.create-wrap { max-width:960px; margin:0 auto }
+.create-grid { display:grid; grid-template-columns:3fr 2fr; gap:32px; padding:28px }
+.create-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px }
+.full-span { grid-column:span 2 }
+.big-btn { grid-column:span 2; padding:16px; font-size:15px; margin-top:8px; box-shadow:0 8px 24px var(--c-primary-glow) }
+.tip-box { background:linear-gradient(145deg,#f8fafc,#fff); border-radius:var(--radius-lg); padding:24px; border:1px solid var(--c-border); display:flex; flex-direction:column; gap:16px }
+.tip-item { background:var(--c-primary-light); padding:16px; border-radius:12px; border-left:3px solid var(--c-primary) }
+.tip-item h4 { font-size:14px; font-weight:700; margin-bottom:6px; color:var(--c-text) }
+.tip-item p  { font-size:12px; color:var(--c-text-secondary); line-height:1.5 }
+
+/* ─── Settings ─── */
+.settings-wrap { max-width:960px; margin:0 auto }
+.settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px }
+.setting-block { background:rgba(255,255,255,.5); border:1px solid var(--c-border); border-radius:var(--radius-lg); padding:24px }
+.setting-block-title { font-size:15px; font-weight:700; color:var(--c-text); margin-bottom:20px; display:flex; align-items:center; gap:8px; padding-bottom:14px; border-bottom:1px solid var(--c-border) }
+.setting-block-title i { color:var(--c-primary) }
+.file-group { position:relative; display:flex; align-items:center }
+.file-group .form-input { padding-right:44px }
+.file-upload-btn {
+    position:absolute; right:6px; top:50%; transform:translateY(-50%);
+    width:32px; height:32px; border-radius:8px; background:var(--c-primary-light);
+    color:var(--c-primary); display:flex; align-items:center; justify-content:center;
+    cursor:pointer; transition:all .2s; font-size:14px;
+}
+.file-upload-btn:hover { background:var(--c-primary); color:#fff }
+.file-hidden { display:none!important }
+.file-status { margin-top:4px; font-size:11px; color:var(--c-text-muted); display:flex; align-items:center; gap:4px }
+.file-status i { color:var(--c-success) }
+.toggle-row {
+    display:flex; align-items:center; gap:10px; margin-top:16px;
+    background:var(--c-surface); padding:14px 16px;
+    border-radius:var(--radius-sm); border:1px solid var(--c-border);
+}
+.toggle-row input[type="checkbox"] { width:18px; height:18px; accent-color:var(--c-primary); cursor:pointer }
+.toggle-row label { cursor:pointer; font-size:13px; font-weight:600; color:var(--c-text) }
+.pwd-wrap { position:relative }
+.pwd-wrap .form-input { padding-right:40px }
+.pwd-toggle { position:absolute; right:12px; top:50%; transform:translateY(-50%); cursor:pointer; color:var(--c-text-muted); padding:4px; transition:color .2s }
+.pwd-toggle:hover { color:var(--c-primary) }
+
+/* ─── Pagination ─── */
+.pagination { padding:20px 24px; display:flex; align-items:center; justify-content:flex-end; gap:6px; flex-wrap:wrap; border-top:1px solid var(--c-border) }
+.page-btn {
+    min-width:36px; height:36px; display:inline-flex; align-items:center; justify-content:center;
+    border-radius:var(--radius-sm); font-size:13px; font-weight:600;
+    color:var(--c-text-secondary); background:var(--c-surface); border:1px solid var(--c-border);
+    cursor:pointer; transition:all .2s; text-decoration:none;
+}
+.page-btn:hover { background:var(--c-surface-solid); border-color:var(--c-primary); color:var(--c-primary) }
+.page-btn.active { background:var(--c-primary); color:#fff; border-color:var(--c-primary); box-shadow:0 4px 12px var(--c-primary-glow) }
+
+/* ─── Animations ─── */
+@keyframes fadeIn { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:translateY(0) } }
+.animate-in { animation:fadeIn .5s var(--ease-out) both }
+.delay-1 { animation-delay:.05s }
+.delay-2 { animation-delay:.1s }
+.delay-3 { animation-delay:.15s }
+.delay-4 { animation-delay:.2s }
+
+details.card > summary { list-style:none; cursor:pointer; user-select:none }
+details.card > summary::-webkit-details-marker { display:none }
+details.card > summary .card-head { transition:background .2s }
+details.card > summary:hover .card-head { background:rgba(99,102,241,.02) }
+
+/* ─── Responsive ─── */
+@media(max-width:1024px) { .stats { grid-template-columns:repeat(2,1fr) } }
+@media(max-width:768px) {
+    .sidebar {
+        position:fixed; top:0; left:0; height:100%;
+        width:280px!important; transform:translateX(-100%);
+        z-index:1000; box-shadow:10px 0 40px rgba(0,0,0,.2);
+    }
+    .sidebar.open { transform:translateX(0) }
+    .sidebar.collapsed { width:280px!important }
+    .sb-collapse-btn { display:none }
+    .sidebar.collapsed .sb-label,
+    .sidebar.collapsed .sb-link-text,
+    .sidebar.collapsed .sb-brand-text,
+    .sidebar.collapsed .sb-user-info,
+    .sidebar.collapsed .sb-badge { opacity:1; width:auto; overflow:visible }
+    .sidebar.collapsed .sb-brand { padding:0 22px; justify-content:flex-start }
+    .sidebar.collapsed .sb-nav { padding:20px 16px }
+    .sidebar.collapsed .sb-link { padding:0 14px; width:auto; height:var(--sb-item-h); justify-content:flex-start; margin:0 0 2px }
+    .sidebar.collapsed .sb-link-icon { margin-right:12px; font-size:15px }
+    .sidebar.collapsed .sb-user { padding:14px 16px; justify-content:flex-start }
+    .menu-btn { display:block }
+    .top-bar { padding:0 20px }
+    .breadcrumb { padding:0 20px 8px }
+    .content { padding:0 16px 80px }
+    .stats { grid-template-columns:1fr; gap:12px }
+    .split-grid { grid-template-columns:1fr!important }
+    .create-grid { grid-template-columns:1fr; padding:20px }
+    .create-form-grid { grid-template-columns:1fr }
+    .full-span,.big-btn { grid-column:span 1 }
+    .settings-grid { grid-template-columns:1fr }
+    .card-head { flex-direction:column; align-items:stretch }
+    .stat-value { font-size:28px }
+    .stat-icon { width:44px; height:44px; font-size:18px }
+    th,td { padding:12px 16px }
+}
+</style>
 </head>
 <body>
 
-<div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+<!-- Sidebar Overlay -->
+<div class="sb-overlay" onclick="toggleSidebar()"></div>
 
-<aside id="sidebar">
-    <div class="brand">
-        <img src="<?php echo htmlspecialchars($conf_avatar); ?>" alt="Logo" class="brand-logo"> 
-        <div style="display:flex; flex-direction:column; justify-content:center;">
-            <span style="line-height:1; font-size:15px;"><?php echo htmlspecialchars(mb_strimwidth($conf_site_title, 0, 16, '..')); ?></span>
-            <span style="font-size:11px; color:rgba(255,255,255,0.4); font-weight:500; margin-top:4px;">Pro Enterprise</span>
+<!-- ═══ SIDEBAR ═══ -->
+<aside class="sidebar" id="sidebar">
+    <div class="sb-brand">
+        <div class="sb-brand-icon">
+            <img src="<?= htmlspecialchars($conf_avatar) ?>" alt="Logo">
+        </div>
+        <div class="sb-brand-text">
+            <span class="sb-brand-name"><?= htmlspecialchars(mb_strimwidth($conf_site_title, 0, 16, '..')) ?></span>
+            <span class="sb-brand-sub">Control Panel</span>
         </div>
     </div>
-    <div class="nav">
-        <div class="nav-label">概览</div>
-        <a href="?tab=dashboard" class="<?=$tab=='dashboard'?'active':''?>"><i class="fas fa-chart-pie"></i> 仪表盘</a>
-        <div class="nav-label">核心业务</div>
-        <a href="?tab=apps" class="<?=$tab=='apps'?'active':''?>"><i class="fas fa-cubes"></i> 应用列表</a>
-        <a href="?tab=list" class="<?=$tab=='list'?'active':''?>"><i class="fas fa-database"></i> 卡密库存</a>
-        <a href="?tab=create" class="<?=$tab=='create'?'active':''?>"><i class="fas fa-plus-circle"></i> 批量制卡</a>
-        <div class="nav-label">系统监控</div>
-        <a href="?tab=logs" class="<?=$tab=='logs'?'active':''?>"><i class="fas fa-history"></i> 审计日志</a>
-        <a href="?tab=settings" class="<?=$tab=='settings'?'active':''?>"><i class="fas fa-cog"></i> 全局配置</a>
-    </div>
-    <div class="user-panel">
-        <img src="<?php echo htmlspecialchars($conf_avatar); ?>" alt="Admin" class="avatar-img">
-        <div class="user-info"><div><?php echo htmlspecialchars($currentAdminUser); ?></div><span>超级管理员</span></div>
-        <a href="?logout=1" class="logout" title="退出登录"><i class="fas fa-sign-out-alt"></i></a>
+
+    <nav class="sb-nav">
+        <div class="sb-label">概览</div>
+        <a href="?tab=dashboard" class="sb-link <?= $tab === 'dashboard' ? 'active' : '' ?>" data-tooltip="仪表盘">
+            <div class="sb-link-glow"></div>
+            <span class="sb-link-icon"><i class="fas fa-chart-pie"></i></span>
+            <span class="sb-link-text">仪表盘</span>
+        </a>
+
+        <div class="sb-divider"></div><div class="sb-label">核心管理</div>
+
+        <a href="?tab=apps" class="sb-link <?= $tab === 'apps' ? 'active' : '' ?>" data-tooltip="应用列表">
+            <div class="sb-link-glow"></div>
+            <span class="sb-link-icon"><i class="fas fa-cubes"></i></span>
+            <span class="sb-link-text">应用列表</span>
+            <span class="sb-badge"><?= count($appList) ?></span>
+        </a>
+
+        <a href="?tab=list" class="sb-link <?= $tab === 'list' ? 'active' : '' ?>" data-tooltip="卡密库存">
+            <div class="sb-link-glow"></div>
+            <span class="sb-link-icon"><i class="fas fa-database"></i></span>
+            <span class="sb-link-text">卡密库存</span>
+        </a>
+
+        <a href="?tab=create" class="sb-link <?= $tab === 'create' ? 'active' : '' ?>" data-tooltip="批量制卡">
+            <div class="sb-link-glow"></div>
+            <span class="sb-link-icon"><i class="fas fa-plus-circle"></i></span>
+            <span class="sb-link-text">批量制卡</span>
+        </a>
+
+        <div class="sb-divider"></div>
+        <div class="sb-label">系统</div>
+
+        <a href="?tab=logs" class="sb-link <?= $tab === 'logs' ? 'active' : '' ?>" data-tooltip="审计日志">
+            <div class="sb-link-glow"></div>
+            <span class="sb-link-icon"><i class="fas fa-shield-halved"></i></span>
+            <span class="sb-link-text">审计日志</span>
+        </a>
+
+        <a href="?tab=settings" class="sb-link <?= $tab === 'settings' ? 'active' : '' ?>" data-tooltip="全局配置">
+            <div class="sb-link-glow"></div>
+            <span class="sb-link-icon"><i class="fas fa-gear"></i></span>
+            <span class="sb-link-text">全局配置</span>
+        </a>
+    </nav>
+
+    <button class="sb-collapse-btn" onclick="toggleCollapse()" title="折叠侧边栏">
+        <i class="fas fa-chevron-left"></i>
+        <span class="sb-collapse-text">收起菜单</span>
+    </button>
+
+    <div class="sb-user">
+        <img src="<?= htmlspecialchars($conf_avatar) ?>" alt="" class="sb-avatar">
+        <div class="sb-user-info">
+            <div class="sb-uname"><?= htmlspecialchars($currentAdminUser) ?></div>
+            <div class="sb-urole">在线· Super Admin</div>
+        </div>
+        <a href="?logout=1" class="sb-logout" title="退出登录">
+            <i class="fas fa-right-from-bracket"></i></a>
     </div>
 </aside>
 
-<main>
-    <header>
-        <div style="display:flex; align-items:center;">
-            <button class="menu-toggle" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
-            <div class="title"><?=$currentTitle?></div>
+<!-- ═══ MAIN ═══ -->
+<main class="main">
+    <header class="top-bar">
+        <div class="top-left">
+            <button class="menu-btn" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
+            <div class="top-title">
+                <i class="fas <?= $currentIcon ?>"></i> <?= $currentTitle ?>
+            </div>
         </div>
-        <?php if($msg): ?><div style="font-size:13px; color:#059669; background:rgba(16, 185, 129, 0.15); padding:8px 16px; border-radius:12px; font-weight:600; display:flex; align-items:center; gap:6px;"><i class="fas fa-check-circle"></i> <?=$msg?></div><?php endif; ?>
-        <?php if($errorMsg): ?><div style="font-size:13px; color:#dc2626; background:rgba(239, 68, 68, 0.15); padding:8px 16px; border-radius:12px; font-weight:600; display:flex; align-items:center; gap:6px;"><i class="fas fa-exclamation-circle"></i> <?=$errorMsg?></div><?php endif; ?>
+        <div class="top-right">
+            <?php if ($msg): ?>
+            <div class="msg-pill msg-success"><i class="fas fa-check-circle"></i> <?= htmlspecialchars($msg) ?></div>
+            <?php endif; ?>
+            <?php if ($errorMsg): ?>
+            <div class="msg-pill msg-error"><i class="fas fa-exclamation-circle"></i> <?= htmlspecialchars($errorMsg) ?></div>
+            <?php endif; ?>
+        </div>
     </header>
 
-    <div class="breadcrumb-bar">
-        GuYi System <i class="fas fa-chevron-right" style="font-size:8px; opacity:0.5;"></i> <?=$currentTitle?>
-    </div>
-
-    <div class="chrome-tabs" id="tabs-container">
-        <!-- JS Generated Tabs -->
+    <div class="breadcrumb">
+        <span>System</span>
+        <i class="fas fa-chevron-right"></i>
+        <span><?= $currentTitle ?></span>
     </div>
 
     <div class="content">
-        <?php if($tab == 'dashboard'): ?>
-            <div class="panel announcement-box" style="margin-top: 20px;">
-                <div style="padding: 24px; display: flex; gap: 20px; align-items: flex-start;">
-                    <div style="width: 48px; height: 48px; border-radius: 12px; background: rgba(59, 130, 246, 0.1); display:flex; align-items:center; justify-content:center; color:#3b82f6; font-size: 20px;"><i class="fas fa-bullhorn"></i></div>
-                    <div style="flex: 1;">
-                        <div style="font-weight: 700; font-size: 17px; margin-bottom: 8px; color: #1e293b; display: flex; justify-content: space-between; align-items:center;">
-                            <span>欢迎回来，<?php echo htmlspecialchars($currentAdminUser); ?></span>
-                            <span style="font-size: 11px; background: #6366f1; color: white; padding: 4px 10px; border-radius: 20px; font-weight: 600; letter-spacing:0.5px;">V26 PRO</span>
+
+<?php
+//═══════════════════════════════════════════════════════
+// TAB: DASHBOARD
+// ═══════════════════════════════════════════════════════
+if ($tab === 'dashboard'): ?>
+
+    <div class="card welcome-card animate-in">
+        <div class="welcome-inner">
+            <div class="welcome-icon"><i class="fas fa-rocket"></i></div>
+            <div style="flex:1">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                    <span class="welcome-title">Welcome back, <?= htmlspecialchars($currentAdminUser) ?></span>
+                    <span class="version-badge">V4REMASTERED</span>
+                </div>
+                <div class="welcome-desc">
+                    系统运行状态良好，所有服务节点连接正常。
+                    <div style="margin-top:8px;opacity:.7;font-size:12px">
+                        <i class="fas fa-circle-info"></i> 交流群:1077643184· <?= date('Y-m-d H:i') ?>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div><div class="stats">
+        <div class="stat animate-in delay-1">
+            <div class="stat-label">总库存量</div>
+            <div class="stat-value"><?= number_format($statTotal) ?></div>
+            <div class="stat-icon"><i class="fas fa-layer-group"></i></div>
+        </div>
+        <div class="stat animate-in delay-2">
+            <div class="stat-label">活跃设备</div>
+            <div class="stat-value"><?= number_format($statActive) ?></div>
+            <div class="stat-icon"><i class="fas fa-wifi"></i></div>
+        </div>
+        <div class="stat animate-in delay-3">
+            <div class="stat-label">接入应用</div>
+            <div class="stat-value"><?= $statApps ?></div>
+            <div class="stat-icon"><i class="fas fa-cubes"></i></div>
+        </div>
+        <div class="stat animate-in delay-4">
+            <div class="stat-label">待售库存</div>
+            <div class="stat-value"><?= number_format($statUnused) ?></div>
+            <div class="stat-icon"><i class="fas fa-tag"></i></div>
+        </div>
+    </div>
+
+    <div class="split-grid animate-in delay-3">
+        <div class="card">
+            <div class="card-head">
+                <span class="card-title"><i class="fas fa-chart-bar"></i> 应用库存占比</span>
+            </div>
+            <div class="table-wrap"><table>
+                <thead><tr><th>应用名称</th><th>卡密数</th><th>占比</th></tr></thead>
+                <tbody>
+                <?php
+                $dTotal = max(1, $statTotal);
+                foreach ($dashboardData['app_stats'] as $stat):
+                    if (empty($stat['app_name'])) continue;
+                    $pct = round(($stat['count'] / $dTotal) * 100, 1);
+                ?>
+                <tr>
+                    <td style="font-weight:600"><?= htmlspecialchars($stat['app_name']) ?></td>
+                    <td><?= number_format($stat['count']) ?></td>
+                    <td>
+                        <div style="display:flex;align-items:center;gap:12px">
+                            <div class="progress"><div class="progress-bar" style="width:<?= $pct ?>%"></div></div>
+                            <span style="font-size:12px;color:var(--c-text-muted);font-weight:600;width:40px"><?= $pct ?>%</span>
                         </div>
-                        <div style="font-size: 14px; color: #475569; line-height: 1.6;">
-                            系统当前运行状态良好，所有节点连接正常。<br>
-                            <div style="margin-top:8px; font-size:12px; opacity:0.8;"><i class="fas fa-info-circle"></i> 如需帮助，请访问官方群：1077643184 或查看审计日志排查异常。</div>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table></div>
+        </div>
+        <div class="card">
+            <div class="card-head">
+                <span class="card-title"><i class="fas fa-chart-pie"></i> 类型分布</span>
+            </div>
+            <div style="height:220px;padding:20px"><canvas id="typeChart"></canvas></div>
+        </div>
+    </div>
+
+    <div class="card animate-in delay-4">
+        <div class="card-head">
+            <span class="card-title"><i class="fas fa-satellite-dish"></i> 实时活跃设备</span>
+            <a href="?tab=list" class="btn btn-primary btn-icon" style="font-size:11px;padding:6px 14px">
+                <i class="fas fa-arrow-right"></i></a>
+        </div>
+        <div class="table-wrap"><table>
+            <thead><tr><th>应用</th><th>卡密</th><th>设备指纹</th><th>激活</th><th>到期</th></tr></thead>
+            <tbody>
+            <?php foreach (array_slice($activeDevices, 0, 5) as $dev): ?>
+            <tr>
+                <td>
+                    <?php if ($dev['app_id'] > 0): ?>
+                    <span class="badge badge-primary"><?= htmlspecialchars($dev['app_name']) ?></span>
+                    <?php else: ?>
+                    <span style="color:var(--c-text-muted);font-size:12px">—</span>
+                    <?php endif; ?>
+                </td>
+                <td><span class="code" onclick="copy('<?= $dev['card_code'] ?>')">
+                        <i class="fas fa-copy"></i> <?= $dev['card_code'] ?>
+                    </span>
+                </td>
+                <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--c-text-muted)">
+                    <?= htmlspecialchars(substr($dev['device_hash'], 0, 12)) ?>…
+                </td>
+                <td><?= date('H:i', strtotime($dev['activate_time'])) ?></td>
+                <td><span class="badge badge-success"><?= date('m-d H:i', strtotime($dev['expire_time'])) ?></span></td>
+            </tr>
+            <?php endforeach; ?>
+            <?php if (empty($activeDevices)): ?>
+            <tr><td colspan="5" style="text-align:center;padding:40px;color:var(--c-text-muted)">暂无在线设备</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table></div>
+    </div>
+
+<?php
+// ═══════════════════════════════════════════════════════
+// TAB: APPS
+// ═══════════════════════════════════════════════════════
+elseif ($tab === 'apps'): ?>
+
+    <div class="pill-tabs animate-in" style="margin-top:8px">
+        <button onclick="switchAppView('apps')" id="btn_apps" class="pill active">
+            <i class="fas fa-list-ul"></i> 应用列表
+        </button>
+        <button onclick="switchAppView('vars')" id="btn_vars" class="pill">
+            <i class="fas fa-sliders-h"></i> 变量管理
+        </button>
+    </div>
+
+    <!--应用列表视图 -->
+    <div id="view_apps">
+        <div class="card animate-in delay-1">
+            <div class="card-head">
+                <span class="card-title">已接入应用</span><span style="font-size:12px;color:var(--c-text-muted);font-weight:500"><?= count($appList) ?> 个应用</span>
+            </div>
+            <div class="table-wrap"><table>
+                <thead><tr><th>应用信息</th><th>App Key</th><th>数据</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody>
+                <?php foreach ($appList as $app): ?>
+                <tr>
+                    <td>
+                        <div style="font-weight:700;font-size:14px"><?= htmlspecialchars($app['app_name']) ?></div>
+                        <div style="font-size:11px;color:var(--c-text-muted);margin-top:4px;display:flex;align-items:center;gap:6px">
+                            <?php if (!empty($app['app_version'])): ?>
+                            <span class="badge badge-neutral" style="padding:2px 6px;font-size:10px"><?= htmlspecialchars($app['app_version']) ?></span>
+                            <?php endif; ?>
+                            <?= htmlspecialchars($app['notes']?: '暂无备注') ?>
                         </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="grid-4">
-                <div class="stat-card">
-                    <div class="stat-label">总库存量</div>
-                    <div class="stat-value"><?php echo number_format($dashboardData['stats']['total']); ?></div>
-                    <div class="stat-icon"><i class="fas fa-layer-group"></i></div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">活跃设备</div>
-                    <div class="stat-value"><?php echo number_format($dashboardData['stats']['active']); ?></div>
-                    <div class="stat-icon"><i class="fas fa-wifi"></i></div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">接入应用</div>
-                    <div class="stat-value"><?php echo count($appList); ?></div>
-                    <div class="stat-icon"><i class="fas fa-cubes"></i></div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">待售库存</div>
-                    <div class="stat-value"><?php echo number_format($dashboardData['stats']['unused']); ?></div>
-                    <div class="stat-icon"><i class="fas fa-tag"></i></div>
-                </div>
-            </div>
-
-            <!-- [修复适配] 使用新的 Class 替代 Inline Style -->
-            <div class="dashboard-split-grid">
-                 <div class="panel">
-                    <div class="panel-head"><span class="panel-title"><i class="fas fa-chart-bar" style="color:#6366f1;"></i> 应用库存占比</span></div>
-                    <div class="table-responsive">
-                        <table>
-                            <thead><tr><th>应用名称</th><th>卡密数</th><th>占比</th></tr></thead>
-                            <tbody>
-                                <?php 
-                                $totalCards = $dashboardData['stats']['total'] > 0 ? $dashboardData['stats']['total'] : 1;
-                                foreach($dashboardData['app_stats'] as $stat): 
-                                    if(empty($stat['app_name'])) continue; 
-                                    $percent = round(($stat['count'] / $totalCards) * 100, 1);
-                                ?>
-                                <tr>
-                                    <td style="font-weight:600;"><?php echo htmlspecialchars($stat['app_name']); ?></td>
-                                    <td><?php echo number_format($stat['count']); ?></td>
-                                    <td><div style="display:flex;align-items:center;gap:12px;"><div style="flex:1;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;min-width:60px;"><div style="width:<?=$percent?>%;height:100%;background:linear-gradient(90deg, #6366f1, #818cf8); border-radius:4px;"></div></div><span style="font-size:12px;color:#64748b;font-weight:600;width:36px;"><?=$percent?>%</span></div></td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-                <div class="panel">
-                    <div class="panel-head"><span class="panel-title"><i class="fas fa-chart-pie" style="color:#10b981;"></i> 类型分布</span></div>
-                    <div style="height:200px;padding:20px;"><canvas id="typeChart"></canvas></div>
-                </div>
-            </div>
-            
-            <div class="panel">
-                <div class="panel-head"><span class="panel-title"><i class="fas fa-satellite-dish" style="color:#f59e0b;"></i> 实时活跃设备</span><a href="?tab=list" class="btn btn-primary" style="font-size:12px; padding:6px 14px;">全部列表</a></div>
-                <div class="table-responsive">
-                    <table>
-                        <thead><tr><th>所属应用</th><th>卡密</th><th>设备指纹</th><th>激活时间</th><th>到期时间</th></tr></thead>
-                        <tbody>
-                            <?php foreach(array_slice($activeDevices, 0, 5) as $dev): ?>
-                            <tr>
-                                <td><?php if($dev['app_id']>0): ?><span class="app-tag"><?=htmlspecialchars($dev['app_name'])?></span><?php else: ?><span style="color:#94a3b8;font-size:12px;">未分类</span><?php endif; ?></td>
-                                <td><span class="code"><?php echo $dev['card_code']; ?></span></td>
-                                <td style="font-family:'JetBrains Mono'; font-size:12px; color:#64748b;"><?php echo htmlspecialchars(substr($dev['device_hash'],0,12)).'...'; // [安全修复] XSS ?></td>
-                                <td><?php echo date('H:i', strtotime($dev['activate_time'])); ?></td>
-                                <td><span class="badge badge-success"><?php echo date('m-d H:i', strtotime($dev['expire_time'])); ?></span></td>
-                            </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        <?php endif; ?>
-
-        <?php if($tab == 'apps'): ?>
-            <!-- 省略中间的 tab 代码，与上一版本一致，未做修改 -->
-            <?php 
-            $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http";
-            $currentScriptDir = dirname($_SERVER['SCRIPT_NAME']);
-            $currentScriptDir = rtrim($currentScriptDir, '/');
-            $apiUrl = $protocol . "://" . $_SERVER['HTTP_HOST'] . $currentScriptDir . "/Verifyfile/api.php";
-            ?>
-
-            <div class="nav-segment" style="margin-top:20px;">
-                <button onclick="switchAppView('apps')" id="btn_apps" class="nav-pill active"><i class="fas fa-list-ul" style="margin-right:6px;"></i>应用列表</button>
-                <button onclick="switchAppView('vars')" id="btn_vars" class="nav-pill"><i class="fas fa-sliders-h" style="margin-right:6px;"></i>变量管理</button>
-            </div>
-            <!-- (中间内容保持不变，为缩短篇幅省略，不影响功能) -->
-            <?php include 'cards_apps_snippet.php'; // 实际部署时请保留完整代码，此处因字数限制略去中间重复代码 ?>
-             <div id="view_apps">
-                <div class="panel">
-                    <div class="panel-head">
-                        <span class="panel-title">已接入应用列表</span>
-                        <span style="font-size:12px;color:#94a3b8; font-weight:500;">共 <?=count($appList)?> 个应用</span>
-                    </div>
-                    <div class="table-responsive">
-                        <table>
-                            <thead><tr><th>应用信息</th><th>App Key</th><th>数据统计</th><th>状态</th><th>操作</th></tr></thead>
-                            <tbody>
-                                <?php foreach($appList as $app): ?>
-                                <tr>
-                                    <td>
-                                        <div style="font-weight:600; color:var(--text-main); font-size:14px;"><?=htmlspecialchars($app['app_name'])?></div>
-                                        <div style="font-size:11px;color:#94a3b8; margin-top:4px; display:flex; align-items:center;">
-                                            <?php if(!empty($app['app_version'])): ?>
-                                                <span class="badge badge-neutral" style="padding:2px 6px; margin-right:6px; font-weight:600; font-size:10px;"><?=htmlspecialchars($app['app_version'])?></span>
-                                            <?php endif; ?>
-                                            <?=htmlspecialchars($app['notes'] ?: '暂无备注')?>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div class="app-key-box" onclick="copy('<?=$app['app_key']?>')" style="cursor:pointer;" title="点击复制">
-                                            <i class="fas fa-key" style="font-size:10px; color:#94a3b8;"></i>
-                                            <span><?=$app['app_key']?></span>
-                                        </div>
-                                    </td>
-                                    <td><span class="badge badge-primary"><?=number_format($app['card_count'])?> 张</span></td>
-                                    <td><?=$app['status']==1 ? '<span class="badge badge-success">正常</span>' : '<span class="badge badge-danger">禁用</span>'?></td>
-                                    <td>
-                                        <button type="button" onclick="openEditApp(<?=$app['id']?>, '<?=addslashes($app['app_name'])?>', '<?=addslashes($app['app_version'])?>', '<?=addslashes($app['notes'])?>')" class="btn btn-primary btn-icon" title="编辑"><i class="fas fa-edit"></i></button>
-                                        <button type="button" onclick="singleAction('toggle_app', <?=$app['id']?>)" class="btn <?=$app['status']==1?'btn-warning':'btn-secondary'?> btn-icon" title="<?=$app['status']==1?'禁用':'启用'?>"><i class="fas <?=$app['status']==1?'fa-ban':'fa-check'?>"></i></button>
-                                        
-                                        <?php if($app['card_count'] > 0): ?>
-                                            <button type="button" onclick="alert('无法删除：该应用下仍有 <?=number_format($app['card_count'])?> 张卡密。\n\n请先进入「卡密库存」，筛选该应用并删除所有卡密后，方可删除应用。')" class="btn btn-secondary btn-icon" style="cursor:pointer; opacity: 0.6;" title="请先清空卡密"><i class="fas fa-trash"></i></button>
-                                        <?php else: ?>
-                                            <button type="button" onclick="singleAction('delete_app', <?=$app['id']?>)" class="btn btn-danger btn-icon" title="删除"><i class="fas fa-trash"></i></button>
-                                        <?php endif; ?>
-                                    </td>
-                                </tr>
-                                <?php endforeach; ?>
-                                <?php if(count($appList) == 0): ?><tr><td colspan="5" style="text-align:center;padding:40px;color:#94a3b8;">暂无应用，请点击下方创建</td></tr><?php endif; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <div class="grid-4" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));">
-                    <details class="panel" open>
-                        <summary class="panel-head"><span class="panel-title"><i class="fas fa-plus-circle" style="margin-right:8px;color:var(--primary);"></i>创建新应用</span></summary>
-                        <div style="padding:28px;">
-                            <form method="POST">
-                                <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
-                                <input type="hidden" name="create_app" value="1">
-                                <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;color:#475569;">应用名称</label>
-                                <input type="text" name="app_name" class="form-control" required placeholder="例如: Android 客户端">
-                                <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;color:#475569;">应用版本号</label>
-                                <input type="text" name="app_version" class="form-control" placeholder="例如: v1.0">
-                                <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;color:#475569;">备注说明</label>
-                                <textarea name="app_notes" class="form-control" style="height:80px;resize:none;" placeholder="可选：填写应用用途描述"></textarea>
-                                <button type="submit" class="btn btn-primary" style="width:100%; padding:12px;">立即创建</button>
-                            </form>
+                    </td>
+                    <td>
+                        <span class="key-box" onclick="copy('<?= $app['app_key'] ?>')">
+                            <i class="fas fa-key"></i> <?= $app['app_key'] ?>
+                        </span>
+                    </td>
+                    <td><span class="badge badge-primary"><?= number_format($app['card_count']) ?> 张</span></td>
+                    <td>
+                        <?= $app['status'] == 1
+                            ? '<span class="badge badge-success">正常</span>'
+                            : '<span class="badge badge-danger">禁用</span>' ?>
+                    </td>
+                    <td>
+                        <div class="btn-group">
+                            <button onclick="openEditApp(<?= $app['id'] ?>,'<?= addslashes($app['app_name']) ?>','<?= addslashes($app['app_version']) ?>','<?= addslashes($app['notes']) ?>')"
+                                    class="btn btn-ghost btn-icon" title="编辑">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button onclick="singleAction('toggle_app',<?= $app['id'] ?>)"
+                                    class="btn btn-ghost btn-icon" title="<?= $app['status'] == 1 ? '禁用' : '启用' ?>">
+                                <i class="fas <?= $app['status'] == 1 ? 'fa-ban' : 'fa-check' ?>"></i>
+                            </button>
+                            <?php if ($app['card_count'] > 0): ?>
+                            <button onclick="alert('请先清空该应用下的 <?= $app['card_count'] ?> 张卡密')"
+                                    class="btn btn-ghost btn-icon" style="opacity:.4" title="需先清空卡密">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                            <?php else: ?>
+                            <button onclick="singleAction('delete_app',<?= $app['id'] ?>)"
+                                    class="btn btn-ghost btn-icon" style="color:var(--c-danger)" title="删除">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                            <?php endif; ?>
                         </div>
-                    </details>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+                <?php if (empty($appList)): ?>
+                <tr><td colspan="5" style="text-align:center;padding:40px;color:var(--c-text-muted)">暂无应用</td></tr>
+                <?php endif; ?></tbody>
+            </table></div>
+        </div>
 
-                    <details class="panel">
-                        <summary class="panel-head"><span class="panel-title"><i class="fas fa-code" style="margin-right:8px;color:#8b5cf6;"></i>API 接口信息</span></summary>
-                        <div style="padding:28px;">
-                            <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;color:#475569;">接口地址</label>
-                            <div class="app-key-box" style="margin-bottom:16px; display:flex; justify-content:space-between; width:100%; padding:12px;">
-                                <span style="font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><?php echo $apiUrl; ?></span>
-                                <i class="fas fa-copy" style="cursor:pointer;color:#6366f1;" onclick="copy('<?php echo $apiUrl; ?>')"></i>
-                            </div>
-                            <div style="font-size:12px;color:#64748b; line-height:1.5;">通过 AppKey 验证卡密或获取公开变量。请妥善保管您的 AppKey。</div>
-                        </div>
-                    </details>
-                </div>
-                
-                <div id="editAppModal" class="modal">
-                    <div class="modal-bg" onclick="closeEditApp()"></div>
-                    <div class="modal-content">
-                        <div style="font-size:18px; font-weight:700; margin-bottom:20px; color:#1e293b;">编辑应用信息</div>
-                        <form method="POST">
-                            <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
-                            <input type="hidden" name="edit_app" value="1">
-                            <input type="hidden" id="edit_app_id" name="app_id">
-                            
-                            <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;">应用名称</label>
-                            <input type="text" id="edit_app_name" name="app_name" class="form-control" required>
-                            
-                            <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;">应用版本号</label>
-                            <input type="text" id="edit_app_version" name="app_version" class="form-control">
-
-                            <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;">备注说明</label>
-                            <textarea id="edit_app_notes" name="app_notes" class="form-control" style="height:80px;resize:none;" placeholder="输入内容..."></textarea>
-                            
-                            <div style="display:flex; gap:12px; margin-top:8px;">
-                                <button type="button" class="btn btn-secondary" onclick="closeEditApp()" style="flex:1;">取消</button>
-                                <button type="submit" class="btn btn-primary" style="flex:1;">保存修改</button>
-                            </div>
-                        </form>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:24px">
+            <details class="card animate-in delay-2" open>
+                <summary>
+                    <div class="card-head">
+                        <span class="card-title"><i class="fas fa-plus-circle"></i> 创建新应用</span>
                     </div>
-                </div>
-            </div>
-
-            <div id="view_vars" style="display:none;">
-                <div class="panel">
-                    <div class="panel-head"><span class="panel-title">云端变量管理</span></div>
-                    <div class="table-responsive">
-                        <table>
-                            <thead><tr><th>所属应用</th><th>键名 (Key)</th><th>值 (Value)</th><th>权限</th><th>操作</th></tr></thead>
-                            <tbody>
-                                <?php 
-                                $hasVars = false;
-                                foreach($appList as $app) {
-                                    $vars = $db->getAppVariables($app['id']);
-                                    foreach($vars as $v) {
-                                        $hasVars = true;
-                                        echo "<tr>";
-                                        echo "<td><span class='app-tag'>".htmlspecialchars($app['app_name'])."</span></td>";
-                                        echo "<td><span class='code' style='color:#ec4899;background:rgba(236, 72, 153, 0.1);border-color:rgba(236, 72, 153, 0.2);'>".htmlspecialchars($v['key_name'])."</span></td>";
-                                        echo "<td><div class='app-key-box' style='max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>".htmlspecialchars($v['value'])."</div></td>";
-                                        echo "<td>".($v['is_public'] ? '<span class="badge badge-success">公开</span>' : '<span class="badge badge-warn">私有</span>')."</td>";
-                                        echo "<td>
-                                            <button type='button' onclick=\"openEditVar({$v['id']}, '".addslashes($v['key_name'])."', '".str_replace(array("\r\n", "\r", "\n"), '\n', addslashes($v['value']))."', {$v['is_public']})\" class='btn btn-primary btn-icon' title='编辑'><i class='fas fa-edit'></i></button>
-                                            <button type='button' onclick=\"singleAction('del_var', {$v['id']}, 'var_id')\" class='btn btn-danger btn-icon' title='删除'><i class='fas fa-trash'></i></button>
-                                        </td>";
-                                        echo "</tr>";
-                                    }
-                                }
-                                if(!$hasVars) echo "<tr><td colspan='5' style='text-align:center;padding:40px;color:#94a3b8;'>暂无变量数据</td></tr>";
-                                ?>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <details class="panel" open>
-                    <summary class="panel-head"><span class="panel-title">添加变量</span></summary>
-                    <div style="padding:28px;">
-                        <form method="POST">
-                            <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
-                            <input type="hidden" name="add_var" value="1">
-                            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:24px;">
-                                <div>
-                                    <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;">所属应用</label>
-                                    <select name="var_app_id" class="form-control" required>
-                                        <option value="">-- 请选择 --</option>
-                                        <?php foreach($appList as $app): ?>
-                                            <option value="<?=$app['id']?>"><?=htmlspecialchars($app['app_name'])?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;">键名 (Key)</label>
-                                    <input type="text" name="var_key" class="form-control" placeholder="例如: update_url" required>
-                                </div>
-                            </div>
-                            <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;">变量值</label>
-                            <textarea name="var_value" class="form-control" style="height:80px;resize:none;" placeholder="输入内容..."></textarea>
-                            <div style="margin-bottom:24px; display:flex; align-items:center;">
-                                <input type="checkbox" id="var_public" name="var_public" value="1" style="width:18px;height:18px;margin-right:10px;accent-color:var(--primary);">
-                                <label for="var_public" style="font-size:13px; font-weight:600;">设为公开变量 (Public)</label>
-                            </div>
-                            <button type="submit" class="btn btn-success" style="width:100%; padding:12px;">保存变量</button>
-                        </form>
-                    </div>
-                </details>
-
-                <div id="editVarModal" class="modal">
-                    <div class="modal-bg" onclick="closeEditVar()"></div>
-                    <div class="modal-content">
-                        <div style="font-size:18px; font-weight:700; margin-bottom:20px;">编辑变量</div>
-                        <form method="POST">
-                            <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
-                            <input type="hidden" name="edit_var" value="1">
-                            <input type="hidden" id="edit_var_id" name="var_id">
-                            
-                            <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;">键名 (Key)</label>
-                            <input type="text" id="edit_var_key" name="var_key" class="form-control" required>
-                            
-                            <label style="display:block;margin-bottom:8px;font-weight:600;font-size:13px;">变量值</label>
-                            <textarea id="edit_var_value" name="var_value" class="form-control" style="height:80px;resize:none;" placeholder="输入内容..."></textarea>
-                            
-                            <div style="margin-bottom:24px; display:flex; align-items:center;">
-                                <input type="checkbox" id="edit_var_public" name="var_public" value="1" style="width:18px;height:18px;margin-right:10px;accent-color:var(--primary);">
-                                <label for="edit_var_public" style="font-size:13px; font-weight:600;">设为公开变量 (Public)</label>
-                            </div>
-                            
-                            <div style="display:flex; gap:12px;">
-                                <button type="button" class="btn btn-secondary" onclick="closeEditVar()" style="flex:1;">取消</button>
-                                <button type="submit" class="btn btn-primary" style="flex:1;">保存修改</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            </div>
-            
-            <script>
-                function switchAppView(view) {
-                    document.getElementById('btn_apps').classList.toggle('active', view === 'apps');
-                    document.getElementById('btn_vars').classList.toggle('active', view === 'vars');
-                    document.getElementById('view_apps').style.display = view === 'apps' ? 'block' : 'none';
-                    document.getElementById('view_vars').style.display = view === 'vars' ? 'block' : 'none';
-                }
-
-                function openEditVar(id, key, val, pub) {
-                    document.getElementById('edit_var_id').value = id;
-                    document.getElementById('edit_var_key').value = key;
-                    document.getElementById('edit_var_value').value = val;
-                    document.getElementById('edit_var_public').checked = (pub == 1);
-                    document.getElementById('editVarModal').classList.add('show');
-                }
-                function closeEditVar() { document.getElementById('editVarModal').classList.remove('show'); }
-
-                function openEditApp(id, name, version, notes) {
-                    document.getElementById('edit_app_id').value = id;
-                    document.getElementById('edit_app_name').value = name;
-                    document.getElementById('edit_app_version').value = version;
-                    document.getElementById('edit_app_notes').value = notes;
-                    document.getElementById('editAppModal').classList.add('show');
-                }
-                function closeEditApp() { document.getElementById('editAppModal').classList.remove('show'); }
-            </script>
-        <?php endif; ?>
-
-        <?php if($tab == 'list'): ?>
-            <!-- 此处 List 模块保持不变，已省略重复代码，实际使用请确保完整 -->
-             <div class="panel" style="margin-bottom: 24px; margin-top:20px;">
-                <div class="panel-head"><span class="panel-title">应用选择</span></div>
-                <div style="padding: 24px;">
-                     <select class="form-control" style="margin: 0;" onchange="location.href='?tab=list&app_id='+this.value">
-                        <option value="">-- 请先选择应用 --</option>
-                        <?php foreach($appList as $app): ?>
-                            <option value="<?=$app['id']?>" <?=($appFilter === $app['id']) ? 'selected' : ''?>><?=htmlspecialchars($app['app_name'])?></option>
-                        <?php endforeach; ?>
-                     </select>
-                </div>
-            </div>
-
-            <?php if ($appFilter !== null || !empty($_GET['q'])): ?>
-            
-                <div class="nav-segment" style="margin-bottom: 24px;">
-                    <a href="?tab=list&filter=all<?=($appFilter!==null?'&app_id='.$appFilter:'')?>" class="nav-pill <?=$filterStr=='all'?'active':''?>">全部</a>
-                    <a href="?tab=list&filter=unused<?=($appFilter!==null?'&app_id='.$appFilter:'')?>" class="nav-pill <?=$filterStr=='unused'?'active':''?>">未激活</a>
-                    <a href="?tab=list&filter=active<?=($appFilter!==null?'&app_id='.$appFilter:'')?>" class="nav-pill <?=$filterStr=='active'?'active':''?>">已激活</a>
-                    <a href="?tab=list&filter=banned<?=($appFilter!==null?'&app_id='.$appFilter:'')?>" class="nav-pill <?=$filterStr=='banned'?'active':''?>">已封禁</a>
-                </div>
-
-                <div class="panel">
-                    <form id="batchForm" method="POST">
-                        <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
-                        <div class="panel-head">
-                            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;width:100%;">
-                                <input type="text" placeholder="搜索卡密、备注或设备指纹..." value="<?=$_GET['q']??''?>" class="form-control" style="margin:0;min-width:200px;flex:1;" onkeydown="if(event.key==='Enter'){event.preventDefault();window.location='?tab=list&q='+this.value;}">
-                                <a href="?tab=list" class="btn btn-icon" style="background:#f1f5f9;color:#64748b;"><i class="fas fa-sync"></i></a>
-                                <a href="?tab=create" class="btn btn-primary btn-icon"><i class="fas fa-plus"></i></a>
-                            </div>
-                            <div style="width:100%; display:flex; gap:8px; margin-top:16px; overflow-x:auto; padding-bottom:4px;">
-                                <button type="submit" name="batch_export" value="1" class="btn" style="background:#6366f1;color:white;flex-shrink:0;">导出</button>
-                                <button type="button" onclick="submitBatch('batch_unbind')" class="btn" style="background:#f59e0b;color:white;flex-shrink:0;">解绑</button>
-                                <button type="button" onclick="batchAddTime()" class="btn" style="background:#10b981;color:white;flex-shrink:0;">加时</button>
-                                <button type="button" onclick="submitBatch('batch_delete')" class="btn btn-danger" style="flex-shrink:0;">删除</button>
-                            </div>
+                </summary>
+                <div class="card-body">
+                    <form method="POST">
+                        <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+                        <input type="hidden" name="create_app" value="1">
+                        <div class="form-group">
+                            <label class="form-label">应用名称</label>
+                            <input type="text" name="app_name" class="form-input" required placeholder="例如: Android客户端">
                         </div>
-                        <input type="hidden" name="add_hours" id="addHoursInput">
-                        <div class="table-responsive">
-                            <table>
-                                <thead><tr><th style="width:40px;text-align:center;"><input type="checkbox" onclick="toggleAll(this)" style="accent-color:var(--primary);"></th><th>应用</th><th>卡密代码</th><th>类型</th><th>状态</th><th>绑定设备</th><th>备注</th><th>操作</th></tr></thead>
-                                <tbody>
-                                    <?php foreach($cardList as $card): ?>
-                                    <tr>
-                                        <td style="text-align:center;"><input type="checkbox" name="ids[]" value="<?=$card['id']?>" class="row-check" style="accent-color:var(--primary);"></td>
-                                        <td><?php if($card['app_id']>0 && !empty($card['app_name'])): ?><span class="app-tag"><?=htmlspecialchars($card['app_name'])?></span><?php else: ?><span style="color:#94a3b8;font-size:12px;">未分类</span><?php endif; ?></td>
-                                        <td><span class="code" onclick="copy('<?=$card['card_code']?>')"><?=$card['card_code']?></span></td>
-                                        <td><span style="font-weight:600;font-size:12px;"><?=CARD_TYPES[$card['card_type']]['name']??$card['card_type']?></span></td>
-                                        <td>
-                                            <?php 
-                                            if($card['status']==2): echo '<span class="badge badge-danger">已封禁</span>';
-                                            elseif($card['status']==1): echo (strtotime($card['expire_time'])>time()) ? (empty($card['device_hash'])?'<span class="badge badge-warn">待绑定</span>':'<span class="badge badge-success">使用中</span>') : '<span class="badge badge-danger">已过期</span>'; 
-                                            else: echo '<span class="badge badge-neutral">闲置</span>'; endif; 
-                                            ?>
-                                        </td>
-                                        <td>
-                                            <?php if($card['status']==1 && !empty($card['device_hash'])): ?>
-                                                <div style="font-family:'JetBrains Mono';font-size:11px;color:#64748b;" title="<?=$card['device_hash']?>">
-                                                    <i class="fas fa-mobile-alt" style="margin-right:4px;"></i>
-                                                    <?=substr($card['device_hash'], 0, 8).'...'?>
-                                                </div>
-                                            <?php else: ?>
-                                                <span style="color:#cbd5e1;">-</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td style="color:#94a3b8;font-size:12px;max-width:100px;overflow:hidden;text-overflow:ellipsis;"><?=htmlspecialchars($card['notes']?:'-')?></td>
-                                        <td style="display:flex;gap:6px;">
-                                            <?php if($card['status']==1 && !empty($card['device_hash'])): ?><button type="button" onclick="singleAction('unbind_card', <?=$card['id']?>)" class="btn btn-warning btn-icon" title="解绑"><i class="fas fa-unlink"></i></button><?php endif; ?>
-                                            <?php if($card['status']!=2): ?>
-                                                <button type="button" onclick="singleAction('ban_card', <?=$card['id']?>)" class="btn btn-secondary btn-icon" style="color:#ef4444;"><i class="fas fa-ban"></i></button>
-                                            <?php else: ?>
-                                                <button type="button" onclick="singleAction('unban_card', <?=$card['id']?>)" class="btn btn-secondary btn-icon" style="color:#10b981;"><i class="fas fa-unlock"></i></button>
-                                            <?php endif; ?>
-                                            <button type="button" onclick="singleAction('del_card', <?=$card['id']?>)" class="btn btn-danger btn-icon"><i class="fas fa-trash"></i></button>
-                                        </td>
-                                    </tr>
-                                    <?php endforeach; ?>
-                                    <?php if(empty($cardList)): ?><tr><td colspan="8" style="text-align:center;padding:40px;color:#94a3b8;">暂无符合条件的卡密</td></tr><?php endif; ?>
-                                </tbody>
-                            </table>
+                        <div class="form-group">
+                            <label class="form-label">版本号</label>
+                            <input type="text" name="app_version" class="form-input" placeholder="例如: v1.0">
                         </div>
-
-                        <div class="pagination">
-                            <select class="form-control" style="width:auto; margin:0 12px 0 0;" onchange="window.location.href='?tab=list&filter=<?=$filterStr?>&page=1&limit='+this.value+'<?=isset($_GET['q'])?'&q='.htmlspecialchars($_GET['q']):''?><?=($appFilter!==null?'&app_id='.$appFilter:'')?>'">
-                                <option value="10" <?=$perPage==10?'selected':''?>>10 条/页</option>
-                                <option value="20" <?=$perPage==20?'selected':''?>>20 条/页</option>
-                                <option value="50" <?=$perPage==50?'selected':''?>>50 条/页</option>
-                                <option value="100" <?=$perPage==100?'selected':''?>>100 条/页</option>
-                            </select>
-                            <?php 
-                            $queryParams = [
-                                'tab' => 'list',
-                                'limit' => $perPage,
-                                'filter' => $filterStr
-                            ];
-                            if (!empty($_GET['q'])) {
-                                $queryParams['q'] = $_GET['q'];
-                            }
-                            if ($appFilter !== null) {
-                                $queryParams['app_id'] = $appFilter;
-                            }
-                            $getUrl = function($p) use ($queryParams) {
-                                $queryParams['page'] = $p;
-                                return '?' . http_build_query($queryParams);
-                            };
-                            if($page > 1) {
-                                echo '<a href="'.$getUrl($page-1).'" class="page-btn"><i class="fas fa-chevron-left"></i></a>';
-                            }
-                            $start = max(1, $page - 2);
-                            $end = min($totalPages, $page + 2);
-                            if ($start > 1) {
-                                echo '<a href="'.$getUrl(1).'" class="page-btn">1</a>';
-                                if ($start > 2) echo '<span class="page-btn" style="border:none;background:transparent;cursor:default;">...</span>';
-                            }
-                            for ($i = $start; $i <= $end; $i++) {
-                                if ($i == $page) {
-                                    echo '<span class="page-btn active">'.$i.'</span>';
-                                } else {
-                                    echo '<a href="'.$getUrl($i).'" class="page-btn">'.$i.'</a>';
-                                }
-                            }
-                            if ($end < $totalPages) {
-                                if ($end < $totalPages - 1) echo '<span class="page-btn" style="border:none;background:transparent;cursor:default;">...</span>';
-                                echo '<a href="'.$getUrl($totalPages).'" class="page-btn">'.$totalPages.'</a>';
-                            }
-                            if($page < $totalPages) {
-                                echo '<a href="'.$getUrl($page+1).'" class="page-btn"><i class="fas fa-chevron-right"></i></a>';
-                            }
-                            ?>
+                        <div class="form-group">
+                            <label class="form-label">备注</label>
+                            <textarea name="app_notes" class="form-input" placeholder="可选"></textarea>
                         </div>
+                        <button type="submit" class="btn btn-primary" style="width:100%">
+                            <i class="fas fa-plus"></i> 立即创建
+                        </button>
                     </form>
                 </div>
-            
-            <?php endif; ?>
-        <?php endif; ?>
+            </details>
 
-        <?php if($tab == 'create'): ?>
-            <div class="create-wrapper">
-                <div class="panel create-panel">
-                    <div class="panel-head">
-                        <span class="panel-title"><i class="fas fa-magic" style="color:var(--primary); margin-right:8px;"></i>批量制卡中心</span>
-                        <span style="font-size:12px; color:#64748b;">快速生成大批量验证卡密</span>
+            <details class="card animate-in delay-3">
+                <summary>
+                    <div class="card-head">
+                        <span class="card-title"><i class="fas fa-code"></i> API接口信息</span>
                     </div>
-                    <div class="create-body">
-                        <!-- Left: Main Form -->
-                        <form method="POST" class="create-form-grid">
-                            <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
-                            <input type="hidden" name="gen_cards" value="1">
-                            
-                            <div class="form-section full-width">
-                                <label><i class="fas fa-layer-group"></i> 归属应用 (必选)</label>
-                                <select name="app_id" class="form-control big-select" required>
-                                    <option value="">-- 请选择目标应用 --</option>
-                                    <?php foreach($appList as $app): if($app['status']==0) continue; ?>
-                                        <option value="<?=$app['id']?>"><?=htmlspecialchars($app['app_name'])?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-
-                            <div class="form-section">
-                                <label><i class="fas fa-sort-numeric-up-alt"></i> 生成数量</label>
-                                <input type="number" name="num" class="form-control" value="10" min="1" max="500" placeholder="最大500">
-                            </div>
-
-                            <div class="form-section">
-                                <label><i class="fas fa-clock"></i> 套餐类型</label>
-                                <select name="type" class="form-control">
-                                    <?php foreach(CARD_TYPES as $k=>$v): ?><option value="<?=$k?>"><?=$v['name']?> (<?=$v['duration']>=86400?($v['duration']/86400).'天':($v['duration']/3600).'小时'?>)</option><?php endforeach; ?>
-                                </select>
-                            </div>
-
-                            <div class="form-section">
-                                <label><i class="fas fa-font"></i> 自定义前缀 (选填)</label>
-                                <input type="text" name="pre" class="form-control" placeholder="例如: VIP-">
-                            </div>
-
-                            <div class="form-section">
-                                <label><i class="fas fa-tag"></i> 备注 (选填)</label>
-                                <input type="text" name="note" class="form-control" placeholder="例如: 代理商批次A">
-                            </div>
-
-                            <button type="submit" class="btn btn-primary big-btn"><i class="fas fa-bolt"></i> 立即生成卡密</button>
-                        </form>
-
-                        <!-- Right: Tips / Preview -->
-                        <div class="create-decoration">
-                             <div class="tip-card">
-                                 <div class="tip-title">💡 制卡小贴士</div>
-                                 <div class="tip-content">
-                                     1. 单次生成建议不超过 500 张以保证系统响应速度。<br><br>
-                                     2. 卡密格式默认为 16 位随机字符，如需区分批次，建议使用“前缀”功能。<br><br>
-                                     3. 生成后可在“单码管理”中批量导出为 TXT 文件。
-                                 </div>
-                             </div>
-                             <div style="flex:1; display:flex; align-items:center; justify-content:center; opacity:0.1;">
-                                 <i class="fas fa-cogs" style="font-size:80px;"></i>
-                             </div>
+                </summary>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label">接口地址</label>
+                        <div class="key-box" style="width:100%;padding:12px;justify-content:space-between"
+                             onclick="copy('<?= $apiUrl ?>')">
+                            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><?= $apiUrl ?></span>
+                            <i class="fas fa-copy" style="color:var(--c-primary);flex-shrink:0"></i>
                         </div>
                     </div>
+                    <p style="font-size:12px;color:var(--c-text-muted);line-height:1.6;margin-top:12px">
+                        通过 AppKey 验证卡密或获取公开变量。请妥善保管您的 AppKey。
+                    </p>
                 </div>
-            </div>
-        <?php endif; ?>
+            </details>
+        </div>
 
-        <?php if($tab == 'logs'): ?>
-            <div class="panel" style="margin-top:20px;">
-                <div class="panel-head"><span class="panel-title">鉴权审计日志</span></div>
-                <div class="table-responsive">
-                    <table>
-                        <thead><tr><th>时间</th><th>来源</th><th>卡密</th><th>IP/设备</th><th>结果</th></tr></thead>
-                        <tbody>
-                            <?php foreach($logs as $log): ?>
-                            <tr>
-                                <td style="color:#64748b;font-size:12px;"><?=date('m-d H:i',strtotime($log['access_time']))?></td>
-                                <td><span class="app-tag" style="font-size:10px;"><?=htmlspecialchars($log['app_name']?:'-')?></td>
-                                <td><span class="code" style="font-size:11px;"><?=substr($log['card_code'],0,10).'...'?></span></td>
-                                <td style="font-size:11px;">
-                                    <?=htmlspecialchars(substr($log['ip_address'],0,15)) // [安全修复] XSS?><br>
-                                    <span style="color:#94a3b8;"><?=htmlspecialchars(substr($log['device_hash'],0,6)) // [安全修复] XSS?></span>
-                                </td>
-                                <td>
-                                    <?php 
-                                    $res=$log['result']; 
-                                    echo (strpos($res,'成功')!==false||strpos($res,'活跃')!==false)?
-                                        '<span class="badge badge-success" style="font-size:10px;">成功</span>' : 
-                                        ((strpos($res,'失败')!==false)?
-                                            '<span class="badge badge-danger" style="font-size:10px;">失败</span>' : 
-                                            '<span class="badge badge-neutral" style="font-size:10px;">'.htmlspecialchars($res).'</span>'); 
-                                    ?>
-                                </td>
-                            </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        <?php endif; ?>
-
-        <?php if($tab == 'settings'): ?>
-            <div class="settings-wrapper">
-                <div class="panel settings-panel" style="padding: 24px;">
-                    <div class="panel-head" style="margin: -24px -24px 24px; padding: 24px;">
-                        <span class="panel-title"><i class="fas fa-sliders-h" style="color:var(--primary); margin-right:8px;"></i>全站与个人设置</span>
+        <!-- 编辑应用 Modal -->
+        <div id="editAppModal" class="modal">
+            <div class="modal-bg" onclick="closeEditApp()"></div>
+            <div class="modal-box">
+                <div class="modal-title">编辑应用信息</div>
+                <form method="POST">
+                    <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+                    <input type="hidden" name="edit_app" value="1">
+                    <input type="hidden" id="edit_app_id" name="app_id">
+                    <div class="form-group">
+                        <label class="form-label">应用名称</label>
+                        <input type="text" id="edit_app_name" name="app_name" class="form-input" required>
                     </div>
-
-                    <div class="settings-grid">
-                        <!-- Left Column: Basic Info & Security -->
-                        <div style="display: flex; flex-direction: column; gap: 24px;">
-                            <!-- System Info -->
-                            <div class="setting-card">
-                                <div class="setting-card-title"><i class="fas fa-globe"></i> 基础配置</div>
-                                <form method="POST" enctype="multipart/form-data">
-                                    <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
-                                    <input type="hidden" name="update_settings" value="1">
-                                    <!-- Keep existing image values hidden if not changed -->
-                                    <input type="hidden" name="favicon" value="<?php echo htmlspecialchars($conf_favicon); ?>">
-                                    <input type="hidden" name="admin_avatar" value="<?php echo htmlspecialchars($conf_avatar); ?>">
-                                    <input type="hidden" name="bg_pc" value="<?php echo htmlspecialchars($conf_bg_pc); ?>">
-                                    <input type="hidden" name="bg_mobile" value="<?php echo htmlspecialchars($conf_bg_mobile); ?>">
-                                    <!-- [保持原值] 若未提交复选框 -->
-                                    <?php if($conf_bg_blur === '1'): ?><input type="hidden" name="bg_blur_default" value="1"><?php endif; ?>
-
-                                    <div class="form-section">
-                                        <label>网站标题</label>
-                                        <input type="text" name="site_title" class="form-control" value="<?php echo htmlspecialchars($conf_site_title); ?>" placeholder="默认为 GuYi Access">
-                                    </div>
-
-                                    <div class="form-section" style="margin-top: 12px;">
-                                        <label>管理员用户名 (显示用)</label>
-                                        <input type="text" name="admin_username" class="form-control" value="<?php echo htmlspecialchars($currentAdminUser); ?>" placeholder="默认为 GuYi">
-                                    </div>
-                                    
-                                    <button type="submit" class="btn btn-primary" style="width:100%; margin-top:16px;">保存基础信息</button>
-                                </form>
-                            </div>
-
-                            <!-- Security -->
-                            <div class="setting-card">
-                                <div class="setting-card-title"><i class="fas fa-shield-alt"></i> 安全设置</div>
-                                <form method="POST">
-                                    <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
-                                    <input type="hidden" name="update_pwd" value="1">
-                                    
-                                    <div class="password-wrapper">
-                                        <input type="password" id="pwd1" name="new_pwd" class="form-control" placeholder="设置新密码" required>
-                                        <i class="fas fa-eye toggle-pwd" onclick="togglePwd()" title="显示/隐藏密码"></i>
-                                    </div>
-                                    
-                                    <div class="password-wrapper">
-                                        <input type="password" id="pwd2" name="confirm_pwd" class="form-control" placeholder="确认新密码" required>
-                                    </div>
-                                    
-                                    <button type="submit" class="btn btn-danger" style="width:100%;">更新管理员密码</button>
-                                </form>
-                            </div>
-                        </div>
-
-                        <!-- Right Column: Visual Assets -->
-                        <div class="setting-card">
-                            <div class="setting-card-title"><i class="fas fa-paint-brush"></i> 视觉素材管理</div>
-                            <form method="POST" enctype="multipart/form-data">
-                                <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
-                                <input type="hidden" name="update_settings" value="1">
-                                <input type="hidden" name="site_title" value="<?php echo htmlspecialchars($conf_site_title); ?>">
-                                <input type="hidden" name="admin_username" value="<?php echo htmlspecialchars($currentAdminUser); ?>">
-
-                                <div class="form-section">
-                                    <label>Favicon 图标</label>
-                                    <div class="file-input-group">
-                                        <input type="text" id="fav_input" name="favicon" class="form-control" value="<?php echo htmlspecialchars($conf_favicon); ?>" placeholder="输入链接或点击右侧上传">
-                                        <input type="file" id="fav_file" name="favicon_file" class="hidden-file" accept="image/*" onchange="updateFileName(this, 'fav_input', 'fav_preview')">
-                                        <label for="fav_file" class="upload-btn-overlay" title="上传图片"><i class="fas fa-cloud-upload-alt"></i></label>
-                                    </div>
-                                    <div id="fav_preview" class="file-preview"></div>
-                                </div>
-
-                                <div class="form-section">
-                                    <label>后台头像</label>
-                                    <div class="file-input-group">
-                                        <input type="text" id="avatar_input" name="admin_avatar" class="form-control" value="<?php echo htmlspecialchars($conf_avatar); ?>" placeholder="输入链接或点击右侧上传">
-                                        <input type="file" id="avatar_file" name="admin_avatar_file" class="hidden-file" accept="image/*" onchange="updateFileName(this, 'avatar_input', 'avatar_preview')">
-                                        <label for="avatar_file" class="upload-btn-overlay" title="上传图片"><i class="fas fa-cloud-upload-alt"></i></label>
-                                    </div>
-                                    <div id="avatar_preview" class="file-preview"></div>
-                                </div>
-
-                                <div class="form-section">
-                                    <label>PC端 背景壁纸</label>
-                                    <div class="file-input-group">
-                                        <input type="text" id="pc_input" name="bg_pc" class="form-control" value="<?php echo htmlspecialchars($conf_bg_pc); ?>" placeholder="输入链接或点击右侧上传">
-                                        <input type="file" id="pc_file" name="bg_pc_file" class="hidden-file" accept="image/*" onchange="updateFileName(this, 'pc_input', 'pc_preview')">
-                                        <label for="pc_file" class="upload-btn-overlay" title="上传图片"><i class="fas fa-cloud-upload-alt"></i></label>
-                                    </div>
-                                    <div id="pc_preview" class="file-preview"></div>
-                                </div>
-
-                                <div class="form-section">
-                                    <label>移动端 背景壁纸</label>
-                                    <div class="file-input-group">
-                                        <input type="text" id="mob_input" name="bg_mobile" class="form-control" value="<?php echo htmlspecialchars($conf_bg_mobile); ?>" placeholder="输入链接或点击右侧上传">
-                                        <input type="file" id="mob_file" name="bg_mobile_file" class="hidden-file" accept="image/*" onchange="updateFileName(this, 'mob_input', 'mob_preview')">
-                                        <label for="mob_file" class="upload-btn-overlay" title="上传图片"><i class="fas fa-cloud-upload-alt"></i></label>
-                                    </div>
-                                    <div id="mob_preview" class="file-preview"></div>
-                                </div>
-
-                                <!-- [新增] 背景模糊开关 -->
-                                <div class="form-section" style="flex-direction:row; align-items:center; gap:10px; margin-top:15px; background:rgba(255,255,255,0.3); padding:10px; border-radius:10px;">
-                                    <input type="checkbox" name="bg_blur" value="1" id="bg_blur_check" <?php echo $conf_bg_blur=='1'?'checked':''; ?> style="width:16px;height:16px;cursor:pointer;">
-                                    <label for="bg_blur_check" style="margin:0;cursor:pointer;">开启背景高度模糊 (Glass Effect)</label>
-                                </div>
-
-                                <button type="submit" class="btn btn-primary" style="width:100%; margin-top:20px;">保存视觉配置</button>
-                            </form>
-                        </div>
+                    <div class="form-group">
+                        <label class="form-label">版本号</label>
+                        <input type="text" id="edit_app_version" name="app_version" class="form-input">
                     </div>
-                </div>
+                    <div class="form-group">
+                        <label class="form-label">备注</label>
+                        <textarea id="edit_app_notes" name="app_notes" class="form-input"></textarea>
+                    </div>
+                    <div style="display:flex;gap:12px">
+                        <button type="button" class="btn btn-secondary" onclick="closeEditApp()" style="flex:1">取消</button>
+                        <button type="submit" class="btn btn-primary" style="flex:1">保存修改</button>
+                    </div>
+                </form>
             </div>
-        <?php endif; ?>
+        </div>
     </div>
+
+    <!-- 变量管理视图 -->
+    <div id="view_vars" style="display:none">
+        <div class="card animate-in">
+            <div class="card-head"><span class="card-title">云端变量管理</span></div>
+            <div class="table-wrap"><table>
+                <thead><tr><th>应用</th><th>键名</th><th>值</th><th>权限</th><th>操作</th></tr></thead>
+                <tbody>
+                <?php
+                $hasVars = false;
+                foreach ($appList as $app) {
+                    $vars = $db->getAppVariables($app['id']);
+                    foreach ($vars as $v) {
+                        $hasVars = true;
+                        echo '<tr>';
+                        echo '<td><span class="badge badge-primary">' . htmlspecialchars($app['app_name']) . '</span></td>';
+                        echo '<td><span class="code" style="color:#ec4899;background:rgba(236,72,153,.06);border-color:rgba(236,72,153,.15)">' . htmlspecialchars($v['key_name']) . '</span></td>';
+                        echo '<td><span class="key-box" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">' . htmlspecialchars($v['value']) . '</span></td>';
+                        echo '<td>' . ($v['is_public'] ? '<span class="badge badge-success">公开</span>' : '<span class="badge badge-warn">私有</span>') . '</td>';
+                        echo '<td><div class="btn-group">';
+                        echo '<button onclick="openEditVar(' . $v['id'] . ',\'' . addslashes($v['key_name']) . '\',\'' . str_replace(["\r\n","\r","\n"], '\n', addslashes($v['value'])) . '\',' . $v['is_public'] . ')" class="btn btn-ghost btn-icon"><i class="fas fa-edit"></i></button>';
+                        echo '<button onclick="singleAction(\'del_var\',' . $v['id'] . ',\'var_id\')" class="btn btn-ghost btn-icon" style="color:var(--c-danger)"><i class="fas fa-trash"></i></button>';
+                        echo '</div></td></tr>';
+                    }
+                }
+                if (!$hasVars) {
+                    echo '<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--c-text-muted)">暂无变量数据</td></tr>';
+                }
+                ?>
+                </tbody>
+            </table></div>
+        </div>
+
+        <details class="card" open>
+            <summary>
+                <div class="card-head">
+                    <span class="card-title"><i class="fas fa-plus"></i> 添加变量</span>
+                </div>
+            </summary>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+                    <input type="hidden" name="add_var" value="1">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:18px">
+                        <div class="form-group">
+                            <label class="form-label">所属应用</label>
+                            <select name="var_app_id" class="form-input" required>
+                                <option value="">-- 选择 --</option>
+                                <?php foreach ($appList as $app): ?>
+                                <option value="<?= $app['id'] ?>"><?= htmlspecialchars($app['app_name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">键名</label>
+                            <input type="text" name="var_key" class="form-input" placeholder="例如: update_url" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">变量值</label>
+                        <textarea name="var_value" class="form-input"></textarea>
+                    </div>
+                    <div class="toggle-row" style="margin-bottom:18px">
+                        <input type="checkbox" name="var_public" value="1" id="var_pub">
+                        <label for="var_pub">设为公开变量 (Public)</label>
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width:100%">
+                        <i class="fas fa-check"></i> 保存变量
+                    </button>
+                </form>
+            </div>
+        </details>
+
+        <!-- 编辑变量 Modal -->
+        <div id="editVarModal" class="modal">
+            <div class="modal-bg" onclick="closeEditVar()"></div>
+            <div class="modal-box">
+                <div class="modal-title">编辑变量</div>
+                <form method="POST">
+                    <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+                    <input type="hidden" name="edit_var" value="1">
+                    <input type="hidden" id="edit_var_id" name="var_id">
+                    <div class="form-group">
+                        <label class="form-label">键名</label>
+                        <input type="text" id="edit_var_key" name="var_key" class="form-input" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">变量值</label>
+                        <textarea id="edit_var_value" name="var_value" class="form-input"></textarea>
+                    </div>
+                    <div class="toggle-row" style="margin-bottom:18px">
+                        <input type="checkbox" id="edit_var_public" name="var_public" value="1">
+                        <label for="edit_var_public">公开变量</label>
+                    </div>
+                    <div style="display:flex;gap:12px">
+                        <button type="button" class="btn btn-secondary" onclick="closeEditVar()" style="flex:1">取消</button>
+                        <button type="submit" class="btn btn-primary" style="flex:1">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+<?php
+// ═══════════════════════════════════════════════════════
+// TAB: LIST
+// ═══════════════════════════════════════════════════════
+elseif ($tab === 'list'): ?>
+
+    <div class="card animate-in" style="margin-top:8px">
+        <div class="card-body" style="padding:20px 28px">
+            <select class="form-input" style="margin:0"
+                    onchange="location.href='?tab=list&app_id='+this.value">
+                <option value="">— 请先选择应用 —</option>
+                <?php foreach ($appList as $app): ?>
+                <option value="<?= $app['id'] ?>" <?= ($appFilter === $app['id']) ? 'selected' : '' ?>>
+                    <?= htmlspecialchars($app['app_name']) ?>
+                </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+    </div>
+
+    <?php if ($appFilter !== null || !empty($_GET['q'])): ?>
+    <div class="pill-tabs animate-in delay-1"><a href="?tab=list&filter=all<?= $appFilter !== null ? '&app_id=' . $appFilter : '' ?>"
+           class="pill <?= $filterStr === 'all' ? 'active' : '' ?>">全部</a>
+        <a href="?tab=list&filter=unused<?= $appFilter !== null ? '&app_id=' . $appFilter : '' ?>"
+           class="pill <?= $filterStr === 'unused' ? 'active' : '' ?>">未激活</a>
+        <a href="?tab=list&filter=active<?= $appFilter !== null ? '&app_id=' . $appFilter : '' ?>"
+           class="pill <?= $filterStr === 'active' ? 'active' : '' ?>">已激活</a>
+        <a href="?tab=list&filter=banned<?= $appFilter !== null ? '&app_id=' . $appFilter : '' ?>"
+           class="pill <?= $filterStr === 'banned' ? 'active' : '' ?>">已封禁</a>
+    </div>
+
+    <div class="card animate-in delay-2">
+        <form id="batchForm" method="POST">
+            <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+            <div class="card-head">
+                <div style="display:flex;gap:10px;align-items:center;flex:1;min-width:0">
+                    <input type="text"
+                           placeholder="搜索卡密、备注或设备指纹…"
+                           value="<?= htmlspecialchars($_GET['q'] ?? '') ?>"
+                           class="form-input" style="margin:0;flex:1;min-width:160px"
+                           onkeydown="if(event.key==='Enter'){event.preventDefault();location='?tab=list&q='+this.value}">
+                    <a href="?tab=list<?= $appFilter !== null ? '&app_id=' . $appFilter : '' ?>"
+                       class="btn btn-secondary btn-icon" title="刷新">
+                        <i class="fas fa-sync-alt"></i>
+                    </a>
+                    <a href="?tab=create" class="btn btn-primary btn-icon" title="制卡">
+                        <i class="fas fa-plus"></i>
+                    </a>
+                </div><div class="btn-group" style="margin-top:8px">
+                    <button type="submit" name="batch_export" value="1" class="btn btn-primary" style="font-size:12px">
+                        <i class="fas fa-file-export"></i> 导出
+                    </button>
+                    <button type="button" onclick="submitBatch('batch_unbind')" class="btn btn-warning" style="font-size:12px">
+                        <i class="fas fa-unlink"></i> 解绑
+                    </button><button type="button" onclick="batchAddTime()" class="btn btn-success" style="font-size:12px">
+                        <i class="fas fa-clock"></i> 加时
+                    </button>
+                <button type="button" onclick="submitBatch('batch_delete')" class="btn btn-danger" style="font-size:12px">
+                        <i class="fas fa-trash"></i> 删除
+                    </button>
+                </div>
+            </div>
+            <input type="hidden" name="add_hours" id="addHoursInput">
+            <div class="table-wrap"><table>
+                <thead><tr>
+                    <th style="width:40px;text-align:center">
+                        <input type="checkbox" onclick="toggleAll(this)" style="accent-color:var(--c-primary)">
+                    </th>
+                    <th>应用</th><th>卡密代码</th><th>类型</th><th>状态</th>
+                    <th>绑定设备</th><th>备注</th><th>操作</th>
+                </tr></thead>
+                <tbody>
+                <?php foreach ($cardList as $card): ?>
+                <tr>
+                    <td style="text-align:center">
+                        <input type="checkbox" name="ids[]" value="<?= $card['id'] ?>"
+                               class="row-check" style="accent-color:var(--c-primary)">
+                    </td>
+                    <td>
+                        <?php if ($card['app_id'] > 0 && !empty($card['app_name'])): ?>
+                        <span class="badge badge-primary"><?= htmlspecialchars($card['app_name']) ?></span>
+                        <?php else: ?>
+                        <span style="color:var(--c-text-muted);font-size:12px">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <span class="code" onclick="copy('<?= $card['card_code'] ?>')">
+                            <i class="fas fa-copy"></i> <?= $card['card_code'] ?>
+                        </span>
+                    </td>
+                    <td><span style="font-weight:600;font-size:12px"><?= CARD_TYPES[$card['card_type']]['name'] ?? $card['card_type'] ?></span></td>
+                    <td>
+                        <?php
+                        if ($card['status'] == 2) {
+                            echo '<span class="badge badge-danger">封禁</span>';
+                        } elseif ($card['status'] == 1) {
+                            if (strtotime($card['expire_time']) > time()) {
+                                echo empty($card['device_hash'])
+                                    ? '<span class="badge badge-warn">待绑定</span>'
+                                    : '<span class="badge badge-success">使用中</span>';
+                            } else {
+                                echo '<span class="badge badge-danger">已过期</span>';
+                            }
+                        } else {
+                            echo '<span class="badge badge-neutral">闲置</span>';
+                        }
+                        ?>
+                    </td>
+                    <td>
+                        <?php if ($card['status'] == 1 && !empty($card['device_hash'])): ?>
+                        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--c-text-muted)"
+                              title="<?= htmlspecialchars($card['device_hash']) ?>">
+                            <i class="fas fa-mobile-alt" style="margin-right:4px;opacity:.5"></i>
+                            <?= substr($card['device_hash'], 0, 8) ?>…
+                        </span>
+                        <?php else: ?>
+                        <span style="color:var(--c-text-muted)">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td style="color:var(--c-text-muted);font-size:12px;max-width:100px;overflow:hidden;text-overflow:ellipsis">
+                        <?= htmlspecialchars($card['notes'] ?: '—') ?>
+                    </td>
+                    <td>
+                        <div class="btn-group">
+                            <?php if ($card['status'] == 1 && !empty($card['device_hash'])): ?>
+                            <button type="button" onclick="singleAction('unbind_card',<?= $card['id'] ?>)"
+                                    class="btn btn-ghost btn-icon" title="解绑">
+                                <i class="fas fa-unlink"></i>
+                            </button>
+                            <?php endif; ?>
+                            <?php if ($card['status'] != 2): ?>
+                            <button type="button" onclick="singleAction('ban_card',<?= $card['id'] ?>)"
+                                    class="btn btn-ghost btn-icon" style="color:var(--c-danger)" title="封禁">
+                                <i class="fas fa-ban"></i>
+                            </button>
+                            <?php else: ?>
+                            <button type="button" onclick="singleAction('unban_card',<?= $card['id'] ?>)"
+                                    class="btn btn-ghost btn-icon" style="color:var(--c-success)" title="解封">
+                                <i class="fas fa-unlock"></i>
+                            </button>
+                            <?php endif; ?>
+                            <button type="button" onclick="singleAction('del_card',<?= $card['id'] ?>)"
+                                    class="btn btn-ghost btn-icon" style="color:var(--c-danger)" title="删除">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+                <?php if (empty($cardList)): ?>
+                <tr><td colspan="8" style="text-align:center;padding:40px;color:var(--c-text-muted)">暂无符合条件的卡密</td></tr>
+                <?php endif; ?>
+                </tbody>
+            </table></div>
+
+            <!-- 分页 -->
+            <div class="pagination">
+                <select class="form-input"
+                        style="width:auto;margin:0 12px 0 0;padding:8px 12px;font-size:12px"
+                        onchange="location.href='?tab=list&filter=<?= $filterStr ?>&page=1&limit='+this.value+'<?= isset($_GET['q']) ? '&q=' . htmlspecialchars($_GET['q']) : '' ?><?= $appFilter !== null ? '&app_id=' . $appFilter : '' ?>'">
+                    <?php foreach ([10, 20, 50, 100] as $lim): ?>
+                    <option value="<?= $lim ?>" <?= $perPage == $lim ? 'selected' : '' ?>><?= $lim ?> 条/页</option>
+                    <?php endforeach; ?>
+                </select>
+                <?php
+                $qp = ['tab' => 'list', 'limit' => $perPage, 'filter' => $filterStr];
+                if (!empty($_GET['q'])) $qp['q'] = $_GET['q'];
+                if ($appFilter !== null) $qp['app_id'] = $appFilter;
+                $mkUrl = function ($p) use ($qp) { $qp['page'] = $p; return '?' . http_build_query($qp); };
+
+                if ($page > 1) echo '<a href="' . $mkUrl($page - 1) . '" class="page-btn"><i class="fas fa-chevron-left"></i></a>';
+                $start = max(1, $page - 2);
+                $end   = min($totalPages, $page + 2);
+                if ($start > 1) {
+                    echo '<a href="' . $mkUrl(1) . '" class="page-btn">1</a>';
+                    if ($start > 2) echo '<span class="page-btn" style="border:none;background:transparent;cursor:default">…</span>';
+                }
+                for ($i = $start; $i <= $end; $i++) {
+                    echo $i == $page
+                        ? '<span class="page-btn active">' . $i . '</span>'
+                        : '<a href="' . $mkUrl($i) . '" class="page-btn">' . $i . '</a>';
+                }
+                if ($end < $totalPages) {
+                    if ($end < $totalPages - 1) echo '<span class="page-btn" style="border:none;background:transparent;cursor:default">…</span>';
+                    echo '<a href="' . $mkUrl($totalPages) . '" class="page-btn">' . $totalPages . '</a>';
+                }
+                if ($page < $totalPages) echo '<a href="' . $mkUrl($page + 1) . '" class="page-btn"><i class="fas fa-chevron-right"></i></a>';
+                ?>
+            </div>
+        </form>
+    </div><?php endif; ?>
+
+<?php
+// ═══════════════════════════════════════════════════════
+// TAB: CREATE
+// ═══════════════════════════════════════════════════════
+elseif ($tab === 'create'): ?>
+
+    <div class="create-wrap animate-in">
+        <div class="card">
+            <div class="card-head">
+                <span class="card-title"><i class="fas fa-wand-magic-sparkles"></i> 批量制卡中心</span>
+                <span style="font-size:12px;color:var(--c-text-muted)">快速生成验证卡密</span>
+            </div>
+            <div class="create-grid">
+                <form method="POST" class="create-form-grid">
+                    <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+                    <input type="hidden" name="gen_cards" value="1">
+                    <div class="form-group full-span">
+                        <label class="form-label"><i class="fas fa-layer-group"></i> 归属应用</label>
+                        <select name="app_id" class="form-input" required style="font-weight:600;color:var(--c-primary)">
+                            <option value="">— 请选择目标应用 —</option>
+                            <?php foreach ($appList as $app): if ($app['status'] == 0) continue; ?>
+                            <option value="<?= $app['id'] ?>"><?= htmlspecialchars($app['app_name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label"><i class="fas fa-sort-numeric-up-alt"></i> 生成数量</label>
+                        <input type="number" name="num" class="form-input" value="10" min="1" max="500">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label"><i class="fas fa-clock"></i> 套餐类型</label>
+                        <select name="type" class="form-input">
+                            <?php foreach (CARD_TYPES as $k => $v): ?>
+                            <option value="<?= $k ?>">
+                                <?= $v['name'] ?> (<?= $v['duration'] >= 86400 ? ($v['duration'] / 86400) . '天' : ($v['duration'] / 3600) . '小时' ?>)
+                            </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label"><i class="fas fa-font"></i> 自定义前缀</label>
+                        <input type="text" name="pre" class="form-input" placeholder="例如: VIP-">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label"><i class="fas fa-tag"></i> 备注</label>
+                        <input type="text" name="note" class="form-input" placeholder="可选">
+                    </div>
+                    <button type="submit" class="btn btn-primary big-btn">
+                        <i class="fas fa-bolt"></i> 立即生成
+                    </button>
+                </form><div class="tip-box">
+                    <div class="tip-item">
+                        <h4>💡 制卡小贴士</h4>
+                        <p>单次建议不超过500张。卡密为16位随机字符，可使用前缀区分批次。</p>
+                    </div>
+                    <div class="tip-item">
+                        <h4>📦 批量导出</h4>
+                        <p>在「卡密库存」中勾选导出为TXT文件，方便分发。</p>
+                    </div>
+                    <div style="flex:1;display:flex;align-items:center;justify-content:center;opacity:.06">
+                        <i class="fas fa-cogs" style="font-size:80px"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<?php
+// ═══════════════════════════════════════════════════════
+// TAB: LOGS
+// ═══════════════════════════════════════════════════════
+elseif ($tab === 'logs'): ?>
+
+    <div class="card animate-in" style="margin-top:8px">
+        <div class="card-head">
+            <span class="card-title"><i class="fas fa-shield-halved"></i> 鉴权审计日志</span></div>
+        <div class="table-wrap"><table>
+            <thead><tr><th>时间</th><th>来源</th><th>卡密</th><th>IP / 设备</th><th>结果</th></tr></thead>
+            <tbody>
+            <?php foreach ($logs as $log): ?>
+            <tr>
+                <td style="color:var(--c-text-muted);font-size:12px">
+                    <?= date('m-d H:i', strtotime($log['access_time'])) ?>
+                </td>
+                <td><span class="badge badge-info" style="font-size:10px">
+                        <?= htmlspecialchars($log['app_name']?: '—') ?>
+                    </span>
+                </td>
+                <td>
+                    <span class="code" style="font-size:11px">
+                        <?= substr($log['card_code'], 0, 10) ?>…
+                    </span>
+                </td>
+                <td style="font-size:11px">
+                    <?= htmlspecialchars(substr($log['ip_address'], 0, 15)) ?><br>
+                    <span style="color:var(--c-text-muted)"><?= htmlspecialchars(substr($log['device_hash'], 0, 6)) ?></span>
+                </td>
+                <td>
+                    <?php
+                    $r = $log['result'];
+                    if (strpos($r, '成功') !== false || strpos($r, '活跃') !== false)
+                        echo '<span class="badge badge-success" style="font-size:10px">成功</span>';
+                    elseif (strpos($r, '失败') !== false)
+                        echo '<span class="badge badge-danger" style="font-size:10px">失败</span>';
+                    else
+                        echo '<span class="badge badge-neutral" style="font-size:10px">' . htmlspecialchars($r) . '</span>';
+                    ?>
+                </td>
+            </tr>
+            <?php endforeach; ?>
+            <?php if (empty($logs)): ?>
+            <tr><td colspan="5" style="text-align:center;padding:40px;color:var(--c-text-muted)">暂无日志</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table></div>
+    </div>
+
+<?php
+// ═══════════════════════════════════════════════════════
+// TAB: SETTINGS
+// ═══════════════════════════════════════════════════════
+elseif ($tab === 'settings'): ?>
+
+    <div class="settings-wrap animate-in">
+        <div class="settings-grid">
+            <div style="display:flex;flex-direction:column;gap:24px">
+                <!-- 基础配置 -->
+                <div class="setting-block">
+                    <div class="setting-block-title"><i class="fas fa-globe"></i> 基础配置</div>
+                    <form method="POST" enctype="multipart/form-data">
+                        <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+                        <input type="hidden" name="update_settings" value="1">
+                        <input type="hidden" name="favicon"value="<?= htmlspecialchars($conf_favicon) ?>">
+                        <input type="hidden" name="admin_avatar" value="<?= htmlspecialchars($conf_avatar) ?>">
+                        <input type="hidden" name="bg_pc"        value="<?= htmlspecialchars($conf_bg_pc) ?>">
+                        <input type="hidden" name="bg_mobile"    value="<?= htmlspecialchars($conf_bg_mobile) ?>">
+                        <div class="form-group">
+                            <label class="form-label">网站标题</label>
+                            <input type="text" name="site_title" class="form-input" value="<?= htmlspecialchars($conf_site_title) ?>">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">管理员用户名</label>
+                            <input type="text" name="admin_username" class="form-input" value="<?= htmlspecialchars($currentAdminUser) ?>">
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="width:100%">
+                            <i class="fas fa-check"></i> 保存基础信息
+                        </button>
+                    </form>
+                </div>
+
+                <!-- 安全设置 -->
+                <div class="setting-block">
+                    <div class="setting-block-title"><i class="fas fa-shield-alt"></i> 安全设置</div>
+                    <form method="POST">
+                        <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+                        <input type="hidden" name="update_pwd" value="1">
+                        <div class="form-group">
+                            <div class="pwd-wrap">
+                                <input type="password" id="pwd1" name="new_pwd"
+                                       class="form-input" placeholder="设置新密码" required>
+                                <i class="fas fa-eye pwd-toggle" onclick="togglePwd()"></i>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <div class="pwd-wrap">
+                                <input type="password" id="pwd2" name="confirm_pwd"
+                                       class="form-input" placeholder="确认新密码" required>
+                </div>
+                        </div>
+                        <button type="submit" class="btn btn-danger" style="width:100%">
+                            <i class="fas fa-key"></i> 更新密码
+                        </button>
+                    </form>
+                </div></div>
+
+            <!-- 视觉素材管理 -->
+            <div class="setting-block">
+                <div class="setting-block-title"><i class="fas fa-paint-brush"></i> 视觉素材管理</div>
+                <form method="POST" enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+                    <input type="hidden" name="update_settings" value="1">
+                    <input type="hidden" name="site_title"value="<?= htmlspecialchars($conf_site_title) ?>">
+                    <input type="hidden" name="admin_username"  value="<?= htmlspecialchars($currentAdminUser) ?>">
+                    <?php
+                    $assets = [
+                        ['Favicon 图标', 'favicon',      $conf_favicon,'favicon_file','fav'],
+                        ['后台头像','admin_avatar', $conf_avatar,     'admin_avatar_file', 'avatar'],
+                        ['PC端壁纸',     'bg_pc',        $conf_bg_pc,'bg_pc_file','pc'],
+                        ['移动端壁纸',   'bg_mobile',    $conf_bg_mobile,'bg_mobile_file','mob'],
+                    ];
+                    foreach ($assets as [$label, $name, $val, $fname, $prefix]):?>
+                    <div class="form-group">
+                        <label class="form-label"><?= $label ?></label>
+                        <div class="file-group">
+                            <input type="text" id="<?= $prefix ?>_input" name="<?= $name ?>"
+                                   class="form-input" value="<?= htmlspecialchars($val) ?>"
+                                   style="margin-bottom:0" placeholder="输入链接或上传">
+                            <input type="file" id="<?= $prefix ?>_file" name="<?= $fname ?>"
+                                   class="file-hidden" accept="image/*"
+                                   onchange="showFile(this,'<?= $prefix ?>')"><label for="<?= $prefix ?>_file" class="file-upload-btn" title="上传">
+                                <i class="fas fa-cloud-upload-alt"></i>
+                            </label>
+                        </div>
+                <div id="<?= $prefix ?>_status" class="file-status"></div>
+                    </div>
+                    <?php endforeach; ?>
+                    <div class="toggle-row">
+                        <input type="checkbox" name="bg_blur" value="1" id="bg_blur_chk"
+                               <?= $conf_bg_blur === '1' ? 'checked' : '' ?>>
+                        <label for="bg_blur_chk">开启背景高斯模糊 (Glass Effect)</label>
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width:100%;margin-top:20px">
+                        <i class="fas fa-palette"></i> 保存视觉配置
+                    </button></form>
+            </div>
+        </div>
+    </div>
+
+<?php endif; ?></div><!-- /.content -->
 </main>
 
-<div id="toast" class="toast"><i class="fas fa-check-circle"></i> 已复制到剪贴板</div>
+<!-- Toast 通知 -->
+<div id="toast" class="toast">
+    <i class="fas fa-check-circle"></i>
+    <span id="toast-text">已复制到剪贴板</span>
+</div>
 
 <script>
-    function toggleSidebar() {
-        const sidebar = document.getElementById('sidebar');
-        const overlay = document.querySelector('.sidebar-overlay');
-        sidebar.classList.toggle('open');
-        overlay.classList.toggle('show');
+//═══════════════════════════════════════════════════════════
+// SIDEBAR
+// ═══════════════════════════════════════════════════════════
+
+function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('open');
+    document.querySelector('.sb-overlay').classList.toggle('show');
+}
+
+function toggleCollapse() {
+    const sb = document.getElementById('sidebar');
+    sb.classList.toggle('collapsed');
+    localStorage.setItem('sb_collapsed', sb.classList.contains('collapsed') ? '1' : '0');
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    const sidebar = document.getElementById('sidebar');
+
+    // 恢复折叠状态
+    if (window.innerWidth > 768 && localStorage.getItem('sb_collapsed') === '1') {
+        sidebar.classList.add('collapsed');
     }
 
-    function togglePwd() {
-        const p1 = document.getElementById('pwd1');
-        const p2 = document.getElementById('pwd2');
-        const icon = document.querySelector('.toggle-pwd');
-        
-        if (p1.type === 'password') {
-            p1.type = 'text';
-            p2.type = 'text';
-            icon.classList.remove('fa-eye');
-            icon.classList.add('fa-eye-slash');
-        } else {
-            p1.type = 'password';
-            p2.type = 'password';
-            icon.classList.remove('fa-eye-slash');
-            icon.classList.add('fa-eye');
-        }
-    }
-
-    function updateFileName(input, targetInputId, previewId) {
-        if (input.files && input.files.length > 0) {
-            const file = input.files[0];
-            document.getElementById(previewId).innerHTML = '<i class="fas fa-check-circle"></i> 已选择文件: ' + file.name;
-        }
-    }
-
-    function copy(text) { navigator.clipboard.writeText(text).then(() => { const t = document.getElementById('toast'); t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2000); }); }
-    function toggleAll(source) { document.querySelectorAll('.row-check').forEach(cb => cb.checked = source.checked); }
-    function submitBatch(actionName) {
-        if(document.querySelectorAll('.row-check:checked').length === 0) { alert('请先勾选需要操作的卡密'); return; }
-        if(!confirm('确定要执行此批量操作吗？')) return;
-        const form = document.getElementById('batchForm');
-        const hidden = document.createElement('input'); hidden.type = 'hidden'; hidden.name = actionName; hidden.value = '1';
-        form.appendChild(hidden); form.submit();
-    }
-    function batchAddTime() {
-        if(document.querySelectorAll('.row-check:checked').length === 0) { alert('请先勾选卡密'); return; }
-        const hours = prompt("请输入增加小时数", "24");
-        if(hours && !isNaN(hours)) { document.getElementById('addHoursInput').value = hours; submitBatch('batch_add_time'); }
-    }
-    function singleAction(actionName, id, idFieldName = 'id') {
-        if(!confirm('确定操作？')) return;
-        const form = document.createElement('form'); form.method = 'POST'; form.style.display = 'none';
-        const actInput = document.createElement('input'); actInput.name = actionName; actInput.value = '1';
-        const idInput = document.createElement('input'); 
-        if(actionName === 'del_var') idInput.name = 'var_id'; else if (actionName.includes('app')) idInput.name = 'app_id'; else idInput.name = 'id';
-        idInput.value = id;
-        const csrfInput = document.createElement('input'); csrfInput.name = 'csrf_token'; csrfInput.value = '<?=$csrf_token?>';
-        form.appendChild(actInput); form.appendChild(idInput); form.appendChild(csrfInput);
-        document.body.appendChild(form); form.submit();
-    }
-
-    <?php if($tab == 'dashboard'): ?>
-    document.addEventListener("DOMContentLoaded", function() {
-        const typeData = <?php echo json_encode($dashboardData['chart_types']); ?>;
-        const cardTypes = <?php echo json_encode(CARD_TYPES); ?>;
-        new Chart(document.getElementById('typeChart'), {
-            type: 'doughnut',
-            data: {
-                labels: Object.keys(typeData).map(k => (cardTypes[k]?.name || k)),
-                datasets: [{ data: Object.values(typeData), backgroundColor: ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'], borderWidth: 0 }]
-            },
-            options: { responsive: true, maintainAspectRatio: false, cutout: '70%', plugins: { legend: { position: 'right', labels: { usePointStyle: true, boxWidth: 8, font: {size: 11, family: "'Outfit', sans-serif"} } } } }
+    // 鼠标光晕跟踪
+    document.querySelectorAll('.sb-link').forEach(link => {
+        link.addEventListener('mousemove', e => {
+            const rect = link.getBoundingClientRect();
+            const glow = link.querySelector('.sb-link-glow');
+            if (glow) {
+                glow.style.setProperty('--glow-x', (e.clientX - rect.left) + 'px');
+                glow.style.setProperty('--glow-y', (e.clientY - rect.top) + 'px');
+            }
         });
     });
-    <?php endif; ?>
 
-    (function(){
-        const currentTabId = '<?=$tab?>';
-        const currentTabTitle = '<?=$currentTitle?>';
-        let openTabs = JSON.parse(localStorage.getItem('admin_tabs') || '[]');
-        
-        if (openTabs.length === 0 || openTabs[0].id !== 'dashboard') {
-            openTabs = openTabs.filter(t => t.id !== 'dashboard'); 
-            openTabs.unshift({id: 'dashboard', title: '首页'});
+    // 快捷键 Ctrl+B
+    document.addEventListener('keydown', e => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+            e.preventDefault();
+            window.innerWidth > 768 ? toggleCollapse() : toggleSidebar();
         }
+        if (e.key === 'Escape' && sidebar.classList.contains('open')) toggleSidebar();
+    });
 
-        const exists = openTabs.find(t => t.id === currentTabId);
-        if (!exists) { openTabs.push({id: currentTabId, title: currentTabTitle}); }
-        localStorage.setItem('admin_tabs', JSON.stringify(openTabs));
+    // 窗口缩放自动关闭
+    window.addEventListener('resize', () => {
+        if (window.innerWidth > 768) {
+            sidebar.classList.remove('open');
+            document.querySelector('.sb-overlay')?.classList.remove('show');
+        }
+    });
+});
 
-        const container = document.getElementById('tabs-container');
-        let html = '';
-        openTabs.forEach(t => {
-            const isActive = (t.id === currentTabId) ? 'active' : '';
-            const closeBtn = (t.id === 'dashboard') ? '' : `<i class="fas fa-times" onclick="closeTab(event, '${t.id}')" style="font-size:10px; margin-left:4px; opacity:0.6;"></i>`;
-            html += `<a href="?tab=${t.id}" class="chrome-tab ${isActive}">${t.title} ${closeBtn}</a>`;
-        });
-        container.innerHTML = html;
+// ═══════════════════════════════════════════════════════════
+// 工具函数
+// ═══════════════════════════════════════════════════════════
 
-        window.closeTab = function(e, tabId) {
-            e.preventDefault(); e.stopPropagation();
-            openTabs = openTabs.filter(t => t.id !== tabId);
-            localStorage.setItem('admin_tabs', JSON.stringify(openTabs));
-            if (tabId === currentTabId) { window.location.href = '?tab=dashboard'; } 
-            else { e.target.closest('.chrome-tab').remove(); }
-        };
-    })();
+function showToast(text = '已复制到剪贴板') {
+    const t = document.getElementById('toast');
+    document.getElementById('toast-text').textContent = text;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function copy(text) {
+    navigator.clipboard.writeText(text).then(() => showToast()).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        showToast();
+    });
+}
+
+function togglePwd() {
+    const p1= document.getElementById('pwd1');
+    const p2   = document.getElementById('pwd2');
+    const icon = document.querySelector('.pwd-toggle');
+    const show = p1.type === 'password';
+    p1.type = p2.type = show ? 'text' : 'password';
+    icon.classList.toggle('fa-eye',!show);
+    icon.classList.toggle('fa-eye-slash', show);
+}
+
+function showFile(input, prefix) {
+    if (input.files && input.files.length > 0) {
+        document.getElementById(prefix + '_status').innerHTML =
+            '<i class="fas fa-check-circle"></i> ' + input.files[0].name;
+    }
+}
+
+function toggleAll(src) {
+    document.querySelectorAll('.row-check').forEach(c => c.checked = src.checked);
+}
+
+function submitBatch(action) {
+    if (!document.querySelectorAll('.row-check:checked').length) {
+        alert('请先勾选卡密'); return;
+    }
+    if (!confirm('确定执行此操作？')) return;
+    const f = document.getElementById('batchForm');
+    const h = document.createElement('input');
+    h.type = 'hidden'; h.name = action; h.value = '1';
+    f.appendChild(h);
+    f.submit();
+}
+
+function batchAddTime() {
+    if (!document.querySelectorAll('.row-check:checked').length) {
+        alert('请先勾选卡密'); return;
+    }
+    const h = prompt('请输入增加小时数', '24');
+    if (h && !isNaN(h)) {
+        document.getElementById('addHoursInput').value = h;
+        submitBatch('batch_add_time');
+    }
+}
+
+function singleAction(action, id) {
+    if (!confirm('确定操作？')) return;
+    const f = document.createElement('form');
+    f.method = 'POST'; f.style.display = 'none';
+    const add = (n, v) => {
+        const i = document.createElement('input');
+        i.name = n; i.value = v; f.appendChild(i);
+    };
+    add(action, '1');
+    add(action === 'del_var' ? 'var_id' : (action.includes('app') ? 'app_id' : 'id'), id);
+    add('csrf_token', '<?= $csrf_token ?>');
+    document.body.appendChild(f);
+    f.submit();
+}
+
+//应用视图切换
+function switchAppView(v) {
+    document.getElementById('btn_apps').classList.toggle('active', v === 'apps');
+    document.getElementById('btn_vars').classList.toggle('active', v === 'vars');
+    document.getElementById('view_apps').style.display = v === 'apps' ? 'block' : 'none';
+    document.getElementById('view_vars').style.display = v === 'vars' ? 'block' : 'none';
+}
+
+// Modal 控制
+function openEditApp(id, name, ver, notes) {
+    document.getElementById('edit_app_id').value      = id;
+    document.getElementById('edit_app_name').value    = name;
+    document.getElementById('edit_app_version').value = ver;
+    document.getElementById('edit_app_notes').value   = notes;
+    document.getElementById('editAppModal').classList.add('show');
+}
+function closeEditApp() { document.getElementById('editAppModal').classList.remove('show') }
+
+function openEditVar(id, key, val, pub) {
+    document.getElementById('edit_var_id').value      = id;
+    document.getElementById('edit_var_key').value     = key;
+    document.getElementById('edit_var_value').value   = val;
+    document.getElementById('edit_var_public').checked = (pub == 1);
+    document.getElementById('editVarModal').classList.add('show');
+}
+function closeEditVar() { document.getElementById('editVarModal').classList.remove('show') }
+
+//═══ Dashboard图表 ═══
+<?php if ($tab === 'dashboard'): ?>
+document.addEventListener('DOMContentLoaded', function () {
+    const typeData= <?= json_encode($dashboardData['chart_types']) ?>;
+    const cardTypes = <?= json_encode(CARD_TYPES) ?>;
+    const colors    = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316'];
+    new Chart(document.getElementById('typeChart'), {
+        type: 'doughnut',
+        data: {
+            labels: Object.keys(typeData).map(k => (cardTypes[k]?.name || k)),
+            datasets: [{
+                data: Object.values(typeData),
+                backgroundColor: colors.slice(0, Object.keys(typeData).length),
+                borderWidth: 0,
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '72%',
+            plugins: {
+                legend: {
+                    position: 'right',
+                    labels: {
+                        usePointStyle: true,
+                        pointStyle: 'circle',
+                        boxWidth: 8,
+                        padding: 16,
+                        font: { size: 11, family: "'Inter',system-ui,sans-serif", weight: '500' }
+                    }
+                }
+            }
+        }
+    });
+});
+<?php endif; ?>
+
+//成功消息自动消失
+<?php if ($msg): ?>
+setTimeout(() => { document.querySelector('.msg-success')?.remove() }, 5000);
+<?php endif; ?>
 </script>
 </body>
 </html>
