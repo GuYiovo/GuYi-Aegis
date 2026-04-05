@@ -1,8 +1,4 @@
 <?php
-/**
- * cards.php - 后台管理主界面 (iOS 26Liquid Glass Concept Edition)
- * Fixed: Chrome Tabs container border removed
- */
 ini_set('display_errors', 0);
 error_reporting(0);
 
@@ -61,9 +57,18 @@ $currentAdminUser = $db->getAdminUsername();
 $conf_site_title = $sysConf['site_title'] ?? 'GuYi Access';
 $conf_favicon = $sysConf['favicon'] ?? base64_decode('aHR0cDovL3EucWxvZ28uY24vaGVhZGltZ19kbD9kc3RfdWluPTE1NjQ0MDAwMCZzcGVjPTY0MCZpbWdfdHlwZT1qcGc=');
 $conf_avatar = $sysConf['admin_avatar'] ?? base64_decode('aHR0cDovL3EucWxvZ28uY24vaGVhZGltZ19kbD9kc3RfdWluPTE1NjQ0MDAwMCZzcGVjPTY0MCZpbWdfdHlwZT1qcGc=');
-$conf_bg_pc = $sysConf['bg_pc'] ?? 'backend/PC.png';
-$conf_bg_mobile = $sysConf['bg_mobile'] ?? 'backend/mod.png';
+
+$conf_bg_pc = $sysConf['bg_pc'] ?? 'https://www.loliapi.com/acg/pc/';
+if(empty($conf_bg_pc) || strpos($conf_bg_pc, 'backend/') !== false) {
+    $conf_bg_pc = 'https://www.loliapi.com/acg/pc/';
+}
+$conf_bg_mobile = $sysConf['bg_mobile'] ?? 'https://www.loliapi.com/acg/pe/';
+if(empty($conf_bg_mobile) || strpos($conf_bg_mobile, 'backend/') !== false) {
+    $conf_bg_mobile = 'https://www.loliapi.com/acg/pe/';
+}
+
 $conf_bg_blur = $sysConf['bg_blur'] ?? '0';
+$conf_api_encryption = $sysConf['api_encryption'] ?? '1';
 
 $mockFile = __DIR__ . '/mock_data.json';
 $defaultAppStats = '[{"app_name":"演示应用A","count":5000},{"app_name":"演示应用B","count":3500},{"app_name":"测试项目","count":388}]';
@@ -192,15 +197,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             };
             
             $settingsData = [
-                'site_title' => trim($_POST['site_title']),
-                'favicon' => $processUpload('favicon_file', trim($_POST['favicon'])),
-                'admin_avatar' => $processUpload('admin_avatar_file', trim($_POST['admin_avatar'])),
-                'bg_pc' => $processUpload('bg_pc_file', trim($_POST['bg_pc'])),
-                'bg_mobile' => $processUpload('bg_mobile_file', trim($_POST['bg_mobile'])),
-                'bg_blur' => isset($_POST['bg_blur']) ? '1' : '0'
+                'site_title' => trim($_POST['site_title'] ?? $sysConf['site_title'] ?? ''),
+                'favicon' => $processUpload('favicon_file', trim($_POST['favicon'] ?? $sysConf['favicon'] ?? '')),
+                'admin_avatar' => $processUpload('admin_avatar_file', trim($_POST['admin_avatar'] ?? $sysConf['admin_avatar'] ?? '')),
+                'bg_pc' => $processUpload('bg_pc_file', trim($_POST['bg_pc'] ?? $sysConf['bg_pc'] ?? '')),
+                'bg_mobile' => $processUpload('bg_mobile_file', trim($_POST['bg_mobile'] ?? $sysConf['bg_mobile'] ?? '')),
+                'bg_blur' => isset($_POST['bg_blur']) || isset($_POST['bg_blur_default']) ? '1' : '0',
+                'api_encryption' => isset($_POST['api_encryption']) || isset($_POST['api_encryption_default']) ? '1' : '0'
             ];
             $db->saveSystemSettings($settingsData);
-            $newUsername = trim($_POST['admin_username']); if(!empty($newUsername)) $db->updateAdminUsername($newUsername);
+            if(isset($_POST['admin_username'])){
+                $newUsername = trim($_POST['admin_username']); if(!empty($newUsername)) $db->updateAdminUsername($newUsername);
+            }
             $msg = "系统配置已保存"; echo "<script>alert('$msg');location.href='cards.php?tab=settings';</script>"; exit;
         } catch(Exception $e) { $errorMsg = "保存失败: " . htmlspecialchars($e->getMessage()); }
     } elseif (isset($_POST['update_mock_data'])) {
@@ -299,15 +307,12 @@ $totalPages = ceil($totalCards / $perPage); if ($totalPages > 0&& $page > $total
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <title><?php echo htmlspecialchars($conf_site_title); ?></title>
-
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="<?php echo htmlspecialchars($conf_site_title); ?>">
 <meta name="format-detection" content="telephone=no">
-
 <link rel="icon" href="<?php echo htmlspecialchars($conf_favicon); ?>" type="image/png">
 <link rel="apple-touch-icon" href="<?php echo htmlspecialchars($conf_avatar); ?>">
-
 <link href="assets/css/all.min.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link href="assets/css/cards.css?v=<?php echo time(); ?>" rel="stylesheet">
@@ -321,14 +326,11 @@ body::before {
     -webkit-backdrop-filter: blur(<?php echo $conf_bg_blur==='1'?'4px':'0px';?>);
     background: rgba(255, 255, 255, 0.02);
 }
-
 @media(max-width:768px){
     body {
         background-image: url('<?php echo htmlspecialchars($conf_bg_mobile); ?>') !important; 
     }
 }
-
-/*========== 极致透明 UI 覆盖层 ========== */
 #sidebar, .mobile-bottom-nav, .panel, .stat-card, .chrome-tab, .modal-content, .announcement-box, .poem-box, .tip-card, .setting-card, .nav-segment {
     background: rgba(255, 255, 255, 0.15) !important;
     backdrop-filter: blur(2px) !important;
@@ -336,8 +338,6 @@ body::before {
     border: 1px solid rgba(255, 255, 255, 0.3) !important;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.02) !important;
 }
-
-/*修复：清除多标签页容器的外框 */
 .chrome-tabs {
     background: transparent !important;
     border: none !important;
@@ -345,14 +345,12 @@ body::before {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
 }
-
 header {
     background: transparent !important;
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
     border-bottom: none !important;
 }
-
 .breadcrumb-bar {
     background: transparent !important;
     border: none !important;
@@ -360,30 +358,25 @@ header {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
 }
-
 .form-control, select, textarea {
     background: rgba(255, 255, 255, 0.2) !important;
     backdrop-filter: blur(2px) !important;
     -webkit-backdrop-filter: blur(2px) !important;
     border: 1px solid rgba(255, 255, 255, 0.4) !important;
 }
-
 table th {
     background: rgba(0, 0, 0, 0.03) !important;
 }
 table tr:hover {
     background: rgba(255, 255, 255, 0.2) !important;
 }
-
 .user-panel {
     background: rgba(255, 255, 255, 0.1) !important;
     border: 1px solid rgba(255, 255, 255, 0.2) !important;
 }
-
 .panel-head {
     border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
 }
-
 .pagination .page-btn {
     background: rgba(255, 255, 255, 0.2) !important;
     border: 1px solid rgba(255, 255, 255, 0.3) !important;
@@ -391,13 +384,12 @@ table tr:hover {
 </style>
 </head>
 <body>
-<!-- Desktop Sidebar -->
 <aside id="sidebar">
     <div class="brand">
         <img src="<?php echo htmlspecialchars($conf_avatar); ?>" alt="Logo" class="brand-logo"> 
         <div style="display:flex; flex-direction:column; justify-content:center;">
             <span style="line-height:1; font-size:15px;"><?php echo htmlspecialchars(mb_strimwidth($conf_site_title, 0, 16, '..')); ?></span>
-            <span style="font-size:11px; color:rgba(0,0,0,0.5); font-weight:600; margin-top:4px;">Pro Enterprise</span>
+            <span style="font-size:11px; color:rgba(0,0,0,0.5); font-weight:600; margin-top:4px;">GuYi Aegis</span>
         </div>
     </div>
     <div class="nav">
@@ -418,7 +410,6 @@ table tr:hover {
     </div>
 </aside>
 
-<!-- iOS26 Floating Navigation -->
 <nav class="mobile-bottom-nav" id="floatingNav">
     <a href="?tab=dashboard" class="mobile-nav-item <?=$tab=='dashboard'?'active':''?>">
         <i class="fas fa-chart-pie"></i><span>首页</span>
@@ -446,7 +437,6 @@ table tr:hover {
     </header><div class="breadcrumb-bar">GuYi System<i class="fas fa-chevron-right" style="font-size:8px; opacity:0.5;"></i> <?=$currentTitle?></div>
     <div class="chrome-tabs" id="tabs-container"></div>
     <div class="content">
-        <!-- Dashboard Content -->
         <?php if($tab == 'dashboard'): ?>
             <div class="dashboard-header-grid">
                 <div class="panel announcement-box" style="margin:0;">
@@ -455,10 +445,10 @@ table tr:hover {
                         <div style="flex: 1; width: 100%;">
                             <div style="font-weight: 700; font-size: 17px; margin-bottom: 8px; color: #1e293b; display: flex; justify-content: space-between; align-items:center;">
                                 <span>欢迎，<?php echo htmlspecialchars($currentAdminUser); ?></span>
-                                <span style="font-size: 11px; background: #6366f1; color: white; padding: 4px 10px; border-radius: 20px; font-weight: 600; letter-spacing:0.5px;">V26PRO</span>
                             </div>
                             
-                            <!-- 官方公告栏 (防二改混淆处理) -->
+                            <div style="font-size: 12px; color: #64748b; margin-bottom: 12px; font-weight: 600;"><?=base64_decode('5L2c6ICFIEd1WWnvvJoxNTY0NDAwMDAgfCDpgq7nrrHvvJprYXJhY3NvbnllcmlrNTk0QGdtYWlsLmNvbQ==')?></div>
+                            
                             <div style="font-size: 13px; color: #475569; margin-bottom: 12px; display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
                                 <span style="display: flex; align-items: center; gap: 4px; background: rgba(59, 130, 246, 0.1); padding: 4px 10px; border-radius: 6px;"><i class="fab fa-qq" style="color:#3b82f6;"></i><?=base64_decode('5a6Y5pa5576k77ya')?><strong style="color:#3b82f6;"><?=base64_decode('MTA3NzY0MzE4NA==')?></strong></span>
                                 <span style="display: flex; align-items: center; gap: 4px; background: rgba(16, 185, 129, 0.1); padding: 4px 10px; border-radius: 6px;"><i class="fas fa-globe" style="color:#10b981;"></i><?=base64_decode('5a6Y572R77ya')?><a href="<?=base64_decode('aHR0cHM6Ly/lj6/niLEudG9wLw==')?>" target="_blank" style="color:#10b981; font-weight:600; text-decoration:none;"><?=base64_decode('aHR0cHM6Ly/lj6/niLEudG9wLw==')?></a></span>
@@ -521,7 +511,6 @@ table tr:hover {
             </div>
         <?php endif; ?>
 
-        <!-- App Management Content -->
         <?php if($tab == 'apps'): ?>
             <?php 
             $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http";
@@ -622,7 +611,6 @@ table tr:hover {
             </script>
         <?php endif; ?>
 
-        <!-- List Content -->
         <?php if($tab == 'list'): ?>
              <div class="panel" style="margin-bottom: 24px; margin-top:20px;">
                 <div class="panel-head"><span class="panel-title"><i class="fas fa-filter" style="color:var(--primary);margin-right:8px;"></i>库存筛选</span></div>
@@ -712,7 +700,6 @@ table tr:hover {
             <?php endif; ?>
         <?php endif; ?>
 
-        <!-- Create Content -->
         <?php if($tab == 'create'): ?><div class="create-wrapper">
                 <div class="panel create-panel">
                     <div class="panel-head"><span class="panel-title"><i class="fas fa-magic" style="color:var(--primary); margin-right:8px;"></i>批量制卡中心</span><span style="font-size:12px; color:#64748b;">快速生成大批量验证卡密</span></div>
@@ -729,13 +716,12 @@ table tr:hover {
                                 <button type="submit" class="btn btn-primary big-btn" style="flex:1;"><i class="fas fa-bolt"></i> 立即生成</button>
                                 <button type="submit" name="auto_export" value="1" class="btn btn-success big-btn" style="flex:1;"><i class="fas fa-file-download"></i> 生成并导出 (TXT)</button>
                             </div>
-                        </form><div class="create-decoration"><div class="tip-card"><div class="tip-title">💡 制卡小贴士</div><div class="tip-content">1. 单次生成建议不超过 500 张以保证系统响应速度。<br><br>2. 卡密格式默认为 16 位随机字符，如需区分批次，建议使用"前缀"功能。<br><br>3. <b>新增功能：</b> 点击"生成并导出"可直接下载包含新卡密的 TXT 文件，无需去列表页筛选。</div></div><div style="flex:1; display:flex; align-items:center; justify-content:center; opacity:0.1;"><i class="fas fa-cogs" style="font-size:80px;"></i></div></div>
+                        </form><div class="create-decoration"><div class="tip-card"><div class="tip-title">💡 制卡小贴士</div><div class="tip-content">1. 单次生成建议不超过 500 张以保证系统响应速度。<br><br>2. 卡密格式默认为 16 位随机字符，如需区分批次，建议使用"前缀"功能。<br><br>3. 点击"生成并导出"可直接下载包含新卡密的 TXT 文件，无需去列表页筛选。</div></div><div style="flex:1; display:flex; align-items:center; justify-content:center; opacity:0.1;"><i class="fas fa-cogs" style="font-size:80px;"></i></div></div>
                     </div>
                 </div>
             </div>
         <?php endif; ?>
 
-        <!-- Settings Content -->
         <?php if($tab == 'settings'): ?>
             <div class="settings-wrapper">
                 <div class="panel settings-panel" style="padding: 24px;">
@@ -749,6 +735,12 @@ table tr:hover {
                                     <?php if($conf_bg_blur === '1'): ?><input type="hidden" name="bg_blur_default" value="1"><?php endif; ?>
                                     <div class="form-section"><label>网站标题</label><input type="text" name="site_title" class="form-control" value="<?php echo htmlspecialchars($conf_site_title); ?>" placeholder="默认为 GuYi Access"></div>
                                     <div class="form-section" style="margin-top: 12px;"><label>管理员用户名 (显示用)</label><input type="text" name="admin_username" class="form-control" value="<?php echo htmlspecialchars($currentAdminUser); ?>" placeholder="默认为 GuYi"></div>
+                                    <div class="form-section" style="margin-top: 12px; background:rgba(255,255,255,0.05); padding:12px; border-radius:10px; border:1px solid rgba(255,255,255,0.1);">
+                                        <label style="display:flex; align-items:center; gap:8px; margin:0; cursor:pointer;">
+                                            <input type="checkbox" name="api_encryption" value="1" <?php echo $conf_api_encryption=='1'?'checked':''; ?> style="width:18px;height:18px;accent-color:var(--primary);">
+                                            <span style="font-weight:600;">开启 API 通讯加密 (易语言对接可关)</span>
+                                        </label>
+                                    </div>
                                     <button type="submit" class="btn btn-primary" style="width:100%; margin-top:16px;">保存基础信息</button>
                                 </form>
                             </div>
@@ -807,6 +799,7 @@ table tr:hover {
                             <form method="POST" enctype="multipart/form-data">
                                 <input type="hidden" name="csrf_token" value="<?=$csrf_token?>"><input type="hidden" name="update_settings" value="1">
                                 <input type="hidden" name="site_title" value="<?php echo htmlspecialchars($conf_site_title); ?>"><input type="hidden" name="admin_username" value="<?php echo htmlspecialchars($currentAdminUser); ?>">
+                                <?php if($conf_api_encryption === '1'): ?><input type="hidden" name="api_encryption_default" value="1"><?php endif; ?>
                                 <div class="form-section"><label>Favicon 图标</label><div class="file-input-group"><input type="text" id="fav_input" name="favicon" class="form-control" value="<?php echo htmlspecialchars($conf_favicon); ?>"><input type="file" id="fav_file" name="favicon_file" class="hidden-file" accept="image/*" onchange="updateFileName(this, 'fav_input', 'fav_preview')"><label for="fav_file" class="upload-btn-overlay"><i class="fas fa-cloud-upload-alt"></i></label></div><div id="fav_preview" class="file-preview"></div></div>
                                 <div class="form-section"><label>后台头像</label><div class="file-input-group"><input type="text" id="avatar_input" name="admin_avatar" class="form-control" value="<?php echo htmlspecialchars($conf_avatar); ?>"><input type="file" id="avatar_file" name="admin_avatar_file" class="hidden-file" accept="image/*" onchange="updateFileName(this, 'avatar_input', 'avatar_preview')"><label for="avatar_file" class="upload-btn-overlay"><i class="fas fa-cloud-upload-alt"></i></label></div><div id="avatar_preview" class="file-preview"></div></div>
                                 <div class="form-section"><label>PC端背景壁纸</label><div class="file-input-group"><input type="text" id="pc_input" name="bg_pc" class="form-control" value="<?php echo htmlspecialchars($conf_bg_pc); ?>"><input type="file" id="pc_file" name="bg_pc_file" class="hidden-file" accept="image/*" onchange="updateFileName(this, 'pc_input', 'pc_preview')"><label for="pc_file" class="upload-btn-overlay"><i class="fas fa-cloud-upload-alt"></i></label></div><div id="pc_preview" class="file-preview"></div></div>

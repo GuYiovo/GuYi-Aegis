@@ -5,7 +5,7 @@ $step = isset($_GET['step']) ? intval($_GET['step']) : 1;
 $msg = '';
 
 $is_mobile = preg_match("/(android|avantgo|blackberry|bolt|boost|cricket|docomo|fone|hiptop|mini|mobi|palm|phone|pie|samsung|scp|wap|windows ce;iemobile|xhtml\\+xml)/i", $_SERVER["HTTP_USER_AGENT"] ?? '');
-$bg_url = $is_mobile ? 'backend/mod.png' : 'backend/PC.png';
+$bg_url = $is_mobile ? 'https://www.loliapi.com/acg/pe/' : 'https://www.loliapi.com/acg/pc/';
 
 function check_env() {
     $r = [];
@@ -64,9 +64,8 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         :root {
-            /* 极致透明的核心参数 */
-            --glass-bg: rgba(255, 255, 255, 0.02); /* 极低的底色 */
-            --glass-border: rgba(255, 255, 255, 0.08); /* 极细若隐若现的边框 */
+            --glass-bg: rgba(255, 255, 255, 0.02);
+            --glass-border: rgba(255, 255, 255, 0.08);
             
             --text-main: rgba(255, 255, 255, 0.95);
             --text-dim: rgba(255, 255, 255, 0.5);
@@ -88,16 +87,14 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
             -webkit-font-smoothing: antialiased;
         }
 
-        /* 全屏背景图 */
         .bg-layer {
             position: fixed;
             inset: 0;
             background: url('<?php echo $bg_url; ?>') center/cover no-repeat;
             z-index: -1;
-            transform: scale(1.05); /* 缓冲边缘缩放 */
+            transform: scale(1.05);
         }
         
-        /* 增加微小的暗色渐变，确保浅色背景下图文依然可读 */
         .bg-layer::after {
             content: '';
             position: absolute;
@@ -105,25 +102,22 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
             background: radial-gradient(circle at center, rgba(0,0,0,0) 0%, rgba(0,0,0,0.15) 100%);
         }
 
-        /* 极致透明玻璃体 */
         .glass-card {
             width: 420px;
             max-width: 90%;
             background: var(--glass-bg);
-            /* 低模糊度 (8px)，背景清晰穿透 */
             backdrop-filter: blur(8px) saturate(120%);
             -webkit-backdrop-filter: blur(8px) saturate(120%);
             border: 1px solid var(--glass-border);
             border-radius: 28px;
             box-shadow: 
-                0 20px 40px rgba(0, 0, 0, 0.2), /* 柔和的外阴影 */
-                inset 0 1px 0 rgba(255, 255, 255, 0.1); /* 顶部的微光反射 */
+                0 20px 40px rgba(0, 0, 0, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
             padding: 36px;
             position: relative;
             z-index: 10;
         }
 
-        /* 顶部与步骤条 */
         header { text-align: center; margin-bottom: 28px; }
         .logo { font-size: 22px; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 8px; }
         .step-indicator {
@@ -140,17 +134,15 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
         .dot.active { background: var(--accent); transform: scale(1.6); box-shadow: 0 0 8px rgba(255,255,255,0.4); }
         .dot.done { background: rgba(255,255,255,0.6); }
 
-        /* 排版 */
         h1 { font-size: 18px; font-weight: 600; text-align: center; margin-bottom: 6px; letter-spacing: 0.5px; }
         .subtitle { font-size: 12px; color: var(--text-dim); text-align: center; margin-bottom: 24px; }
 
-        /* 表单输入区（全透明质感） */
         .form-group { margin-bottom: 14px; position: relative; }
         .input-row { display: flex; gap: 10px; }
         
         input {
             width: 100%;
-            background: rgba(255, 255, 255, 0.02); /* 近乎透明 */
+            background: rgba(255, 255, 255, 0.02);
             border: 1px solid rgba(255, 255, 255, 0.06);
             border-radius: 12px;
             padding: 13px 16px;
@@ -167,7 +159,6 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
         }
         input::placeholder { color: rgba(255, 255, 255, 0.25); font-size: 13px; }
 
-        /* 环境检测列表 */
         .env-item {
             display: flex;
             align-items: center;
@@ -185,7 +176,6 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
         .status-ok { color: var(--success); }
         .status-no { color: var(--error); }
 
-        /* 半透明发光按钮 */
         .btn {
             width: 100%;
             background: rgba(255, 255, 255, 0.1);
@@ -211,7 +201,6 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
         .btn:active { transform: translateY(1px); }
         .btn:disabled { background: rgba(255,255,255,0.03); border-color: transparent; color: rgba(255,255,255,0.2); cursor: not-allowed; transform: none; box-shadow: none; }
 
-        /* 警告框 */
         .alert {
             background: rgba(248, 113, 113, 0.08);
             border: 1px solid rgba(248, 113, 113, 0.15);
@@ -223,7 +212,6 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
             margin-bottom: 20px;
         }
 
-        /* 完成页样式 */
         .success-icon {
             width: 56px; height: 56px;
             background: rgba(52, 211, 153, 0.1);
@@ -246,7 +234,6 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
         .credential-box i { width: 16px; text-align: center; margin-right: 6px; opacity: 0.7; }
         .credential-box code { color: #fff; background: rgba(255,255,255,0.08); padding: 3px 6px; border-radius: 4px; font-family: monospace; letter-spacing: 0.5px; }
 
-        /* 移动端细微调整 */
         @media (max-width: 480px) {
             .glass-card { padding: 30px 20px; width: 92%; border-radius: 24px; }
             .input-row { flex-direction: column; gap: 14px; }
@@ -273,7 +260,7 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
 
     <?php if($step == 1): ?>
         <h1>环境检测</h1>
-        <p class="subtitle">检查服务器运行环境是否就绪</p>
+        <p class="subtitle"><?=base64_decode('5L2c6ICFIEd1WWnvvJoxNTY0NDAwMDAgfCDpgq7nrrHvvJprYXJhY3NvbnllcmlrNTk0QGdtYWlsLmNvbQ==')?></p>
         
         <div class="env-list">
             <?php foreach($env as $it): ?>
@@ -292,7 +279,7 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
 
     <?php elseif($step == 2): ?>
         <h1>系统配置</h1>
-        <p class="subtitle">配置数据库与管理员账号</p>
+        <p class="subtitle"><?=base64_decode('5L2c6ICFIEd1WWnvvJoxNTY0NDAwMDAgfCDpgq7nrrHvvJprYXJhY3NvbnllcmlrNTk0QGdtYWlsLmNvbQ==')?></p>
         
         <form method="POST" action="?step=3">
             <div class="form-group">
@@ -317,7 +304,6 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
                 </div>
             </div>
 
-            <!-- 超透明分割线 -->
             <div style="height: 1px; background: rgba(255,255,255,0.05); margin: 14px 0 20px;"></div>
 
             <div class="form-group">
@@ -339,7 +325,8 @@ $env_ok = !in_array(false, array_column($env, 'ok'));
             <p><i class="fas fa-user"></i> 管理员账号：<code>GuYi</code></p>
             <p><i class="fas fa-lock"></i> 登录密码：<code>********</code> (您刚刚设置的密码)</p>
             <p style="margin-top: 12px; font-size: 11px; opacity: 0.5; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;">
-                <i class="fas fa-shield-halved"></i> 安全提示：安装文件 install.php 已自动销毁。
+                <i class="fas fa-shield-halved"></i> 安全提示：安装文件 install.php 已自动销毁。<br>
+                <?=base64_decode('5L2c6ICFIEd1WWnvvJoxNTY0NDAwMDAg6YKu566x77yaa2FyYWNzb255ZXJpazU5NEBnbWFpbC5jb20=')?>
             </p>
         </div>
 

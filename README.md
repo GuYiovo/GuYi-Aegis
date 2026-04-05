@@ -1,7 +1,8 @@
 <div align="center">
 
-# 🛡️ GuYi Aegis (企业版架构)
+# 🛡️ GuYi Aegis
 **极致详细的开源软件卡密授权与验证基建引擎**
+**作者 GuYi：156440000 邮箱：karacsonyerik594@gmail.com**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Security](https://img.shields.io/badge/Security-AES--256--GCM-success.svg)]()
@@ -22,6 +23,7 @@ GuYi Aegis 都为您准备了极其详尽的开箱即用对接源码。
 ## 📋 目录
 
 - [✨ 核心特性](#-核心特性)
+- [🛠️ 部署与安装](#️-部署与安装)
 - [🚀 快速开始](#-快速开始)
 - [💻 支持的生态矩阵](#-支持的生态矩阵)
 - [💬 社区与支持](#-社区与支持)
@@ -33,6 +35,20 @@ GuYi Aegis 都为您准备了极其详尽的开箱即用对接源码。
 - 🌍 **全语言制霸**：提供 C/C++、Go、Rust、C#、Java、Python、Node.js、易语言、PHP、Flutter、Vue 等 30+ 主流与冷门语言的现成对接代码。
 - ⚡ **极简高效 API**：单端点（Single Endpoint）设计，一个 POST 请求搞定验证、激活、绑定与数据拉取。
 - 🛡️ **企业级高可用**：内置请求并发限制（防 CC/高频防刷）、云端心跳保活、硬件特征（设备码）绑定与离线容错机制。
+
+## 🛠️ 部署与安装
+
+### 环境要求
+- **PHP**: ≥ 7.2
+- **数据库**: MySQL (需启用 PDO 扩展)
+- **扩展支持**: 需启用 JSON 扩展
+
+### 安装步骤
+1. **上传源码**：将本项目的所有文件上传至您的服务器网站根目录。
+2. **设置权限**：确保网站根目录以及目录下的 `config.php`（若存在）具有可写入权限。
+3. **运行安装向导**：在浏览器中访问您的域名安装路径，例如 `http://您的域名/install.php`。
+4. **配置数据库**：根据页面提示，输入您的 MySQL 数据库连接信息，并设置后台系统的管理员账号密码。
+5. **完成安装**：安装成功后，系统会自动销毁 `install.php` 以确保安全。接着您可以前往后台配置应用与卡密。
 
 ## 🚀 快速开始
 

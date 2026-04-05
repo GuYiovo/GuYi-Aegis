@@ -1,10 +1,4 @@
 <?php
-/**
- * login.php - 安全登录入口
- * 安全特性：关闭错误回显、防暴力破解锁定、CSRF防御
- */
-
-// --- [安全修正 1] 生产环境关闭错误回显，防止泄露路径 ---
 ini_set('display_errors', 0); 
 error_reporting(0);
 
@@ -12,11 +6,10 @@ require_once 'config.php';
 require_once 'database.php';
 session_start();
 
-// --- [安全修正 2] 简单的防暴力破解 (IP锁定机制) ---
 $client_ip = $_SERVER['REMOTE_ADDR'];
 $lock_file = sys_get_temp_dir() . '/ay_lock_' . md5($client_ip);
-$max_attempts = 5; // 最大尝试次数
-$lockout_time = 900; // 锁定时间 (15分钟)
+$max_attempts = 5;
+$lockout_time = 900;
 
 if (file_exists($lock_file)) {
     $lock_data = json_decode(file_get_contents($lock_file), true);
@@ -28,16 +21,14 @@ if (file_exists($lock_file)) {
             <p>请等待 <b>{$remaining}</b> 分钟后再试。</p>
             </div>");
     } else {
-        @unlink($lock_file); // 解锁
+        @unlink($lock_file);
     }
 }
 
-// --- 数据库连接 ---
 try { $db = new Database(); } catch (Throwable $e) {
-    die("系统维护中，请稍后重试。"); // 不显示具体错误信息
+    die("系统维护中，请稍后重试。");
 }
 
-// --- 初始化 CSRF ---
 if (empty($_SESSION['csrf_token'])) {
     try {
         if (function_exists('random_bytes')) { $_SESSION['csrf_token'] = bin2hex(random_bytes(32)); } 
@@ -46,7 +37,6 @@ if (empty($_SESSION['csrf_token'])) {
 }
 $csrf_token = $_SESSION['csrf_token'];
 
-// --- 自动登录检查 ---
 $is_trusted = false;
 try {
     $adminHashFingerprint = md5((string)$db->getAdminHash());
@@ -72,16 +62,22 @@ try {
 
 if (isset($_SESSION['admin_logged_in'])) { header('Location: cards.php'); exit; }
 
-// --- 界面配置 ---
 $sysConf = $db->getSystemSettings();
 $conf_site_title = $sysConf['site_title'] ?? 'GuYi Access';
 $conf_favicon = $sysConf['favicon'] ?? 'http://q.qlogo.cn/headimg_dl?dst_uin=156440000&spec=640&img_type=png';
 $conf_avatar = $sysConf['admin_avatar'] ?? 'http://q.qlogo.cn/headimg_dl?dst_uin=156440000&spec=640&img_type=png';
-$conf_bg_pc = $sysConf['bg_pc'] ?? 'backend/PC.png';
-$conf_bg_mobile = $sysConf['bg_mobile'] ?? 'backend/mod.png';
+
+$conf_bg_pc = $sysConf['bg_pc'] ?? 'https://www.loliapi.com/acg/pc/';
+if(empty($conf_bg_pc) || strpos($conf_bg_pc, 'backend/') !== false) {
+    $conf_bg_pc = 'https://www.loliapi.com/acg/pc/';
+}
+$conf_bg_mobile = $sysConf['bg_mobile'] ?? 'https://www.loliapi.com/acg/pe/';
+if(empty($conf_bg_mobile) || strpos($conf_bg_mobile, 'backend/') !== false) {
+    $conf_bg_mobile = 'https://www.loliapi.com/acg/pe/';
+}
+
 $conf_bg_blur = $sysConf['bg_blur'] ?? '1';
 
-// --- 处理登录 ---
 $login_error = null;
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
     if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'])) {
@@ -98,7 +94,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
         if (!$error) {
             $hash = $db->getAdminHash();
             if (!empty($hash) && password_verify($_POST['password'], $hash)) {
-                // 登录成功，清除锁定记录
                 if (file_exists($lock_file)) @unlink($lock_file);
                 
                 session_regenerate_id(true);
@@ -112,24 +107,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
                 
                 header('Location: cards.php'); exit;
             } else {
-                // [安全修正] 记录失败次数
                 $current_attempts = 1;
                 if (file_exists($lock_file)) {
                     $lock_data = json_decode(file_get_contents($lock_file), true);
                     if ($lock_data) $current_attempts = $lock_data['attempts'] + 1;
                 }
                 
-                // 写入锁定文件
                 if ($current_attempts >= $max_attempts) {
                     file_put_contents($lock_file, json_encode(['attempts' => $current_attempts, 'expire' => time() + $lockout_time]));
                     $error = "尝试次数过多，IP 已被锁定 15 分钟";
                 } else {
-                    file_put_contents($lock_file, json_encode(['attempts' => $current_attempts, 'expire' => time() + 60])); // 临时记录
+                    file_put_contents($lock_file, json_encode(['attempts' => $current_attempts, 'expire' => time() + 60]));
                     $remaining_tries = $max_attempts - $current_attempts;
                     $error = "密钥无效 (还剩 {$remaining_tries} 次机会)";
                 }
                 
-                usleep(500000); // 延时 0.5秒
+                usleep(500000);
             }
         }
         $login_error = $error;
@@ -178,7 +171,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
                 <?php endif; ?>
                 <button class="ay-btn" type="submit" id="ay-submit">立即进入</button>
             </form>
-            <div class="ay-foot">© <?php echo htmlspecialchars($conf_site_title); ?> System</div>
+            <div class="ay-foot">© <?php echo htmlspecialchars($conf_site_title); ?> System | <?=base64_decode('5L2c6ICFIEd1WWnvvJoxNTY0NDAwMDAg6YKu566x77yaa2FyYWNzb255ZXJpazU5NEBnbWFpbC5jb20=')?></div>
         </div>
     </section>
 </main>
